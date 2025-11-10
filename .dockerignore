@@ -1,0 +1,9 @@
+# Ignore node modules and logs
+node_modules
+npm-debug.log
+
+# Ignore compiled JS files (we will compile inside Docker)
+dist
+
+# Ignore OS files
+.DS_Store

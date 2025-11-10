@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  # Service 1: RabbitMQ Message Queue
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"   # Service port
+      - "15672:15672" # Management UI
+    networks:
+      - trading_network
+
+  # ----------------------------------------------------
+
+  # Service 2: AI Signal Generator (Service A)
+  service-a:
+    build:
+      context: ./service-a           # Dockerfile context path (service-a)
+      dockerfile: ../Dockerfile.node # Our shared Dockerfile
+    container_name: service-a
+    # 'depends_on' ensures rabbitmq starts before service A
+    depends_on:
+      - rabbitmq
+    networks:
+      - trading_network
+    # (IMPORTANT) Override 'localhost' in code
+    environment:
+      - RABBITMQ_URL=amqp://rabbitmq
+
+  # ----------------------------------------------------
+
+  # Service 3: Trade Execution Service (Service B)
+  service-b:
+    build:
+      context: ./service-b           # Dockerfile context path (service-b)
+      dockerfile: ../Dockerfile.node # Our shared Dockerfile
+    # No container_name to allow scaling
+    depends_on:
+      - rabbitmq
+    networks:
+      - trading_network
+    environment:
+      - RABBITMQ_URL=amqp://rabbitmq
+
+# ------------------------------------------------------
+
+# Virtual network for Docker services to communicate
+networks:
+  trading_network:
+    driver: bridge
