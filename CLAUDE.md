@@ -173,10 +173,192 @@ Service B uses manual acknowledgment for reliability:
 - Redis: Single instance (can use Redis Cluster/Sentinel for HA)
 - Load balancing: Automatic round-robin by RabbitMQ
 
+## Git Workflow & Branching Model
+
+This project follows the **Git Flow** branching model for professional version control.
+
+### Branch Structure
+
+- **`main`**: Production-ready code
+  - Always stable and deployable
+  - Only receives merges from `develop` branch for releases
+  - Protected branch (requires PR reviews)
+  - Tagged with version numbers (e.g., `v1.0.0`)
+
+- **`develop`**: Integration branch for active development
+  - Main development branch where features are integrated
+  - Always contains the latest delivered development changes
+  - Base branch for all new feature branches
+  - Should be stable but may contain unreleased features
+
+- **`feature/*`**: Feature branches
+  - Created from `develop` branch
+  - Naming convention: `feature/brief-description` (e.g., `feature/add-redis-cache`)
+  - One feature per branch
+  - Merged back into `develop` via Pull Request
+  - Deleted after successful merge
+
+### Workflow Process
+
+1. **Starting a new feature**:
+   ```bash
+   git checkout develop
+   git pull origin develop
+   git checkout -b feature/my-feature-name
+   ```
+
+2. **Development**:
+   - Make atomic commits with conventional commit messages
+   - Commit format: `type(scope): description`
+   - Types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`
+   - Example: `feat(service-a): add signal validation`
+
+3. **Creating Pull Request**:
+   ```bash
+   git push -u origin feature/my-feature-name
+   gh pr create --base develop --title "Feature title" --body "Description"
+   ```
+   - ALWAYS target `develop` branch (not `main`)
+   - Write comprehensive PR descriptions
+   - Include summary, changes, testing notes
+
+4. **After PR approval**:
+   - Merge PR into `develop` using GitHub UI
+   - Delete feature branch
+   - Pull latest `develop` locally
+
+5. **Release to production**:
+   - Create PR from `develop` to `main`
+   - After merge, tag the release: `git tag v1.0.0`
+   - Push tags: `git push --tags`
+
+### Commit Message Format
+
+Follow conventional commits:
+```
+<type>(<scope>): <description>
+
+[optional body]
+```
+
+**Types**:
+- `feat`: New feature
+- `fix`: Bug fix
+- `docs`: Documentation changes
+- `refactor`: Code refactoring (no functional changes)
+- `test`: Adding or updating tests
+- `chore`: Maintenance tasks (dependencies, config)
+
+**Examples**:
+```
+feat(service-a): add signal validation logic
+fix(service-b): resolve Redis connection timeout
+docs: update CLAUDE.md with branching model
+test(service-b): add integration tests for Redis caching
+refactor(service-a): extract signal generation to separate module
+chore: update dependencies to latest versions
+```
+
+### Important Rules
+
+1. **Never commit directly to `main` or `develop`**
+   - Always use feature branches and PRs
+
+2. **Always create feature branches from `develop`**
+   - Not from `main` or other feature branches
+
+3. **Keep feature branches focused**
+   - One feature/fix per branch
+   - Make atomic commits
+
+4. **Write clear PR descriptions**
+   - Include what changed, why, and how to test
+
+5. **Delete merged feature branches**
+   - Keeps repository clean
+   - Use `git branch -d feature/branch-name` locally
+
+### Branch Protection (Recommended)
+
+Configure GitHub branch protection for `main` and `develop`:
+- Require pull request reviews before merging
+- Require status checks to pass (CI/CD tests)
+- Require branches to be up to date before merging
+- No direct pushes allowed
+
+## Testing Infrastructure
+
+### Test Suites
+Both services include comprehensive test coverage:
+
+**Unit Tests**:
+- Located in `tests/unit/`
+- Test individual functions in isolation
+- Use Vitest with mocking for external dependencies
+- Run with: `npm run test:unit`
+
+**Integration Tests**:
+- Located in `tests/integration/`
+- Test real interactions with RabbitMQ and Redis
+- Use testcontainers to spin up real service instances
+- Run with: `npm run test:integration`
+
+### Running Tests
+```bash
+# Run all tests
+npm test
+
+# Run unit tests only
+npm run test:unit
+
+# Run integration tests only
+npm run test:integration
+
+# Run with coverage report
+npm run test:coverage
+
+# Run tests in watch mode
+npm run test:watch
+
+# View test UI
+npm run test:ui
+```
+
+### Code Quality Tools
+
+**ESLint**:
+- TypeScript-aware linting with strict rules
+- Configuration: `.eslintrc.json` in each service
+- Run: `npm run lint`
+- Auto-fix: `npm run lint:fix`
+
+**Prettier**:
+- Consistent code formatting
+- Configuration: `.prettierrc.json` in each service
+- Check formatting: `npm run format:check`
+- Auto-format: `npm run format`
+
+**TypeScript**:
+- Strict mode enabled
+- Type checking: `npm run type-check`
+
+### Pre-commit Workflow (Recommended)
+Before committing:
+```bash
+npm run type-check  # Verify TypeScript types
+npm run lint:fix    # Fix linting issues
+npm run format      # Format code
+npm test            # Run all tests
+```
+
 ## Future Roadmap
 Per README, planned integrations include:
 - ✅ Redis caching layer for market data (COMPLETED)
-- gRPC service for portfolio management (low-latency sync calls)
-- API Gateway (Kong) with rate limiting
-- Time-series DB (InfluxDB/TimescaleDB)
-- Observability stack (Prometheus, Grafana, distributed tracing)
+- ✅ Unit and integration tests with Vitest and testcontainers (COMPLETED)
+- ✅ ESLint and Prettier configuration (COMPLETED)
+- GitHub Actions CI/CD pipeline (IN PROGRESS)
+- Git hooks with Husky for pre-commit checks (PLANNED)
+- gRPC service for portfolio management (PLANNED)
+- API Gateway (Kong) with rate limiting (PLANNED)
+- Time-series DB (InfluxDB/TimescaleDB) (PLANNED)
+- Observability stack (Prometheus, Grafana, distributed tracing) (PLANNED)
