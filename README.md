@@ -72,6 +72,13 @@ This project demonstrates enterprise-level patterns for building scalable, low-l
   - ✅ Track trade counters per asset
   - [ ] Use Redis Sorted Sets for time-series data
 
+- [x] **Testing Infrastructure**: Production-level automated testing
+  - ✅ Unit tests with Vitest and mocking
+  - ✅ Integration tests with testcontainers
+  - ✅ ESLint and Prettier configuration
+  - [ ] GitHub Actions CI/CD pipeline
+  - [ ] Git hooks with Husky
+
 - [ ] **gRPC Service**: Low-latency synchronous communication
   - Portfolio management service
   - Protobuf definitions
@@ -231,19 +238,100 @@ REDIS_URL=redis://localhost:6379  # Local development
 └── README.md
 ```
 
+## 🔀 Development Workflow
+
+This project follows the **Git Flow** branching model:
+
+### Branch Structure
+- **`main`**: Production-ready code (protected)
+- **`develop`**: Integration branch for active development
+- **`feature/*`**: Feature branches (e.g., `feature/add-grpc-service`)
+
+### Workflow
+```bash
+# Start new feature
+git checkout develop
+git pull origin develop
+git checkout -b feature/my-feature
+
+# Make changes with atomic commits
+git add .
+git commit -m "feat(scope): description"
+
+# Push and create PR (target: develop)
+git push -u origin feature/my-feature
+gh pr create --base develop --title "Feature title" --body "Description"
+```
+
+### Commit Convention
+Follow conventional commits: `type(scope): description`
+- **Types**: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`
+- **Examples**:
+  - `feat(service-a): add signal validation`
+  - `fix(service-b): resolve Redis timeout`
+  - `test(service-b): add integration tests`
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
+
+## 🧪 Testing
+
+Both services include comprehensive test coverage:
+
+### Running Tests
+```bash
+cd service-a  # or service-b
+
+# Run all tests
+npm test
+
+# Run unit tests only (fast, uses mocks)
+npm run test:unit
+
+# Run integration tests (slower, uses testcontainers)
+npm run test:integration
+
+# Generate coverage report
+npm run test:coverage
+
+# Run tests in watch mode
+npm run test:watch
+```
+
+### Code Quality
+```bash
+# Lint code
+npm run lint
+npm run lint:fix
+
+# Format code
+npm run format
+npm run format:check
+
+# Type check
+npm run type-check
+```
+
+## 🤝 Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for:
+- Branch naming conventions
+- Commit message format
+- PR submission guidelines
+- Code review process
+
 ## 🤝 Future Enhancements
 
-### Phase 2: Redis Integration
-- Add caching layer for market data
-- Implement cache-aside pattern
-- Use Redis pub/sub for real-time updates
+### Phase 3: CI/CD Pipeline
+- GitHub Actions workflows
+- Automated testing on PR
+- Docker image publishing
 
-### Phase 3: gRPC Services
+### Phase 4: gRPC Services
 - Add portfolio management service
 - Implement bi-directional streaming
 - Compare REST vs gRPC performance
 
-### Phase 4: Observability
+### Phase 5: Observability
 - Add Prometheus metrics
 - Create Grafana dashboards
 - Implement distributed tracing with Jaeger
