@@ -1,32 +1,9 @@
 import amqp from 'amqplib';
+import { generateMockSignal } from './signals';
 
 // --- Configuration ---
 const RABBITMQ_URL = process.env.RABBITMQ_URL || 'amqp://localhost'; // RabbitMQ server URL (from env or default to localhost)
 const QUEUE_NAME = 'trading_signals'; // Name of the queue
-
-// --- Trading Signal Type ---
-type TradeSignal = {
-  assetId: string;
-  action: 'BUY' | 'SELL';
-  volume: number; // MWh
-  timestamp: string;
-};
-
-/**
- * Generate a random mock trading signal
- */
-function generateMockSignal(): TradeSignal {
-  const actions: ['BUY', 'SELL'] = ['BUY', 'SELL'];
-  const randomAction = actions[Math.floor(Math.random() * actions.length)];
-  const randomVolume = parseFloat((Math.random() * 100 + 10).toFixed(2)); // 10 to 110 MWh
-
-  return {
-    assetId: 'BATTERY_GRID_01',
-    action: randomAction,
-    volume: randomVolume,
-    timestamp: new Date().toISOString(),
-  };
-}
 
 /**
  * Main function: Connect to RabbitMQ and publish messages
