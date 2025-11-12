@@ -2,6 +2,7 @@
 
 > A production-grade proof-of-concept demonstrating microservices architecture, event-driven design, and scalable infrastructure for high-frequency trading systems.
 
+[![CI](https://github.com/CreateWithLevi/microservices-trading-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/CreateWithLevi/microservices-trading-platform/actions/workflows/ci.yml)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.4-blue.svg)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-18-green.svg)](https://nodejs.org/)
 [![Docker](https://img.shields.io/badge/Docker-compose-blue.svg)](https://www.docker.com/)
