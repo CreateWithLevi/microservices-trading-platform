@@ -13,7 +13,19 @@ services:
 
   # ----------------------------------------------------
 
-  # Service 2: AI Signal Generator (Service A)
+  # Service 2: Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    networks:
+      - trading_network
+    command: redis-server --appendonly yes
+
+  # ----------------------------------------------------
+
+  # Service 3: AI Signal Generator (Service A)
   service-a:
     build:
       context: ./service-a           # Dockerfile context path (service-a)
@@ -30,7 +42,7 @@ services:
 
   # ----------------------------------------------------
 
-  # Service 3: Trade Execution Service (Service B)
+  # Service 4: Trade Execution Service (Service B)
   service-b:
     build:
       context: ./service-b           # Dockerfile context path (service-b)
@@ -38,10 +50,12 @@ services:
     # No container_name to allow scaling
     depends_on:
       - rabbitmq
+      - redis
     networks:
       - trading_network
     environment:
       - RABBITMQ_URL=amqp://rabbitmq
+      - REDIS_URL=redis://redis:6379
 
 # ------------------------------------------------------
 
