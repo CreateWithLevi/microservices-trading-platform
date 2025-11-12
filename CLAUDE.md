@@ -18,6 +18,7 @@ A microservices-based trading platform demonstrating event-driven architecture w
 
 - **Service B** (`service-b/`): Trade execution engine/consumer that processes signals
   - Consumes from `trading_signals` queue
+  - Integrates Redis for caching asset prices and storing trade history
   - Simulates 50ms processing time per message
   - Horizontally scalable (can run multiple instances with round-robin load balancing)
   - Uses manual message acknowledgment (ack/nack) for reliability
@@ -27,11 +28,23 @@ A microservices-based trading platform demonstrating event-driven architecture w
   - Non-durable queue (doesn't persist across restarts)
   - Enables horizontal scaling via round-robin distribution
 
+- **Redis**: In-memory data store for caching and fast data access
+  - Caches asset prices with 30-second TTL
+  - Stores last 100 trades in `trade_history` list
+  - Tracks trade counts per asset
+  - Persistence enabled with AOF (Append-Only File)
+
 ### Communication Flow
 1. Service A connects to RabbitMQ and asserts the `trading_signals` queue
 2. Service A publishes JSON-serialized `TradeSignal` messages as Buffers
 3. RabbitMQ distributes messages round-robin across Service B instances
-4. Service B instances consume messages, process them, and acknowledge (ack) on success or reject (nack) on failure
+4. Service B instances:
+   - Consume messages from RabbitMQ
+   - Check Redis cache for asset price (cache hit) or generate new price (cache miss)
+   - Calculate trade value using cached price
+   - Store trade record in Redis (`trade_history` list)
+   - Increment trade counter in Redis
+   - Acknowledge message to RabbitMQ on success or reject (nack) on failure
 
 ### Shared Type Definition
 Both services duplicate the `TradeSignal` type definition:
@@ -49,7 +62,7 @@ Note: In production, this would be in a shared types package.
 
 ### Docker Compose (Production-like)
 ```bash
-# Start all services (RabbitMQ + Service A + Service B)
+# Start all services (RabbitMQ + Redis + Service A + Service B)
 docker compose up --build -d
 
 # Scale Service B to 5 instances for horizontal scaling demo
@@ -61,6 +74,7 @@ docker compose logs -f
 # View logs for specific service
 docker compose logs -f service-a
 docker compose logs -f service-b
+docker compose logs -f redis
 
 # Stop all services
 docker compose down
@@ -70,6 +84,9 @@ docker compose down
 ```bash
 # Start RabbitMQ locally
 docker run -d --name rabbitmq-dev -p 5672:5672 -p 15672:15672 rabbitmq:3-management
+
+# Start Redis locally
+docker run -d --name redis-dev -p 6379:6379 redis:7-alpine
 
 # Service A
 cd service-a
@@ -89,12 +106,30 @@ npm run build    # Compile TypeScript to dist/
   - View queue depth, message rates, consumer connections
   - Useful for observing load balancing across Service B instances
 
+- Redis CLI (inspect cache and data):
+  ```bash
+  # Connect to Redis container
+  docker exec -it redis redis-cli
+
+  # Useful commands:
+  GET price:BATTERY_GRID_01           # Get cached price
+  LRANGE trade_history 0 9            # View last 10 trades
+  GET trade_count:BATTERY_GRID_01     # Get trade count for asset
+  KEYS *                              # List all keys
+  TTL price:BATTERY_GRID_01           # Check time-to-live for price cache
+  ```
+
 ## Environment Configuration
 
 ### Environment Variables
 - `RABBITMQ_URL`: RabbitMQ connection string
   - Docker: `amqp://rabbitmq` (uses Docker network service name)
   - Local: `amqp://localhost` (default)
+  - Set in `docker-compose.yml` for containerized services
+
+- `REDIS_URL`: Redis connection string (Service B only)
+  - Docker: `redis://redis:6379` (uses Docker network service name)
+  - Local: `redis://localhost:6379` (default)
   - Set in `docker-compose.yml` for containerized services
 
 ## Build System
@@ -113,6 +148,15 @@ npm run build    # Compile TypeScript to dist/
 
 ## Key Implementation Details
 
+### Redis Caching Strategy (Service B)
+Service B implements a cache-aside pattern:
+- **Price Caching**: Asset prices cached for 30 seconds with `SETEX`
+  - Cache hit: Retrieves price from Redis (fast)
+  - Cache miss: Generates new price, stores in Redis, returns value
+- **Trade History**: Stores last 100 trades using Redis lists (`LPUSH` + `LTRIM`)
+- **Trade Counters**: Tracks trade count per asset with `INCR`
+- **Connection Handling**: Automatic retry with exponential backoff (max 2s delay)
+
 ### Message Acknowledgment Pattern
 Service B uses manual acknowledgment for reliability:
 - Success: `channel.ack(msg)` removes message from queue
@@ -123,12 +167,15 @@ Service B uses manual acknowledgment for reliability:
 ### Scaling Considerations
 - Service A: Single instance (generates signals at fixed rate)
 - Service B: Horizontally scalable (use `--scale` flag)
+  - All instances share same Redis cache
+  - Price cache reduces redundant calculations across instances
 - RabbitMQ: Single instance (can be clustered in production)
+- Redis: Single instance (can use Redis Cluster/Sentinel for HA)
 - Load balancing: Automatic round-robin by RabbitMQ
 
 ## Future Roadmap
 Per README, planned integrations include:
-- Redis caching layer for market data
+- ✅ Redis caching layer for market data (COMPLETED)
 - gRPC service for portfolio management (low-latency sync calls)
 - API Gateway (Kong) with rate limiting
 - Time-series DB (InfluxDB/TimescaleDB)
