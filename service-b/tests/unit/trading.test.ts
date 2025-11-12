@@ -73,9 +73,9 @@ describe('trading', () => {
 
     beforeEach(() => {
       mockRedis = {
-        lpush: vi.fn(),
-        ltrim: vi.fn(),
-        incr: vi.fn(),
+        lpush: vi.fn() as any,
+        ltrim: vi.fn() as any,
+        incr: vi.fn() as any,
       };
 
       signal = {

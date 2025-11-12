@@ -63,12 +63,13 @@ describe('signals', () => {
     });
 
     it('should generate current timestamp if not provided', () => {
-      const before = new Date().toISOString();
+      const before = Date.now();
       const signal = createTradeSignal('ASSET_123', 'BUY', 75);
-      const after = new Date().toISOString();
+      const after = Date.now();
+      const signalTime = new Date(signal.timestamp).getTime();
 
-      expect(signal.timestamp).toBeGreaterThanOrEqual(before);
-      expect(signal.timestamp).toBeLessThanOrEqual(after);
+      expect(signalTime).toBeGreaterThanOrEqual(before);
+      expect(signalTime).toBeLessThanOrEqual(after);
     });
   });
 });

@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import amqp, { type Connection, type Channel } from 'amqplib';
+import amqp from 'amqplib';
 import { GenericContainer, type StartedTestContainer } from 'testcontainers';
 import { generateMockSignal, type TradeSignal } from '../../src/signals';
 
 describe('RabbitMQ Integration', () => {
   let container: StartedTestContainer;
-  let connection: Connection;
-  let channel: Channel;
+  let connection: any;
+  let channel: any;
   const QUEUE_NAME = 'trading_signals';
 
   beforeAll(async () => {
@@ -51,7 +51,7 @@ describe('RabbitMQ Integration', () => {
 
     // Consume message
     const receivedMessage = await new Promise<TradeSignal>((resolve) => {
-      channel.consume(QUEUE_NAME, (msg) => {
+      channel.consume(QUEUE_NAME, (msg: any) => {
         if (msg) {
           const content = msg.content.toString();
           const parsedSignal = JSON.parse(content) as TradeSignal;
@@ -80,7 +80,7 @@ describe('RabbitMQ Integration', () => {
     const receivedSignals: TradeSignal[] = [];
     for (let i = 0; i < signals.length; i++) {
       const signal = await new Promise<TradeSignal>((resolve) => {
-        channel.consume(QUEUE_NAME, (msg) => {
+        channel.consume(QUEUE_NAME, (msg: any) => {
           if (msg) {
             const content = msg.content.toString();
             const parsedSignal = JSON.parse(content) as TradeSignal;
@@ -102,7 +102,7 @@ describe('RabbitMQ Integration', () => {
 
     const result = await new Promise<{ valid: boolean; error?: string }>(
       (resolve) => {
-        channel.consume(QUEUE_NAME, (msg) => {
+        channel.consume(QUEUE_NAME, (msg: any) => {
           if (msg) {
             try {
               const content = msg.content.toString();

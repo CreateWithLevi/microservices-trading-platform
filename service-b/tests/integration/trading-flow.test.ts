@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import amqp, { type Connection, type Channel } from 'amqplib';
+import amqp from 'amqplib';
 import Redis from 'ioredis';
 import { GenericContainer, type StartedTestContainer } from 'testcontainers';
 import {
@@ -12,8 +12,8 @@ import {
 describe('Trading Flow Integration', () => {
   let rabbitContainer: StartedTestContainer;
   let redisContainer: StartedTestContainer;
-  let connection: Connection;
-  let channel: Channel;
+  let connection: any;
+  let channel: any;
   let redis: Redis;
   const QUEUE_NAME = 'trading_signals';
 
@@ -144,7 +144,7 @@ describe('Trading Flow Integration', () => {
 
     // 2. Consume signal from RabbitMQ (simulating Service B)
     const processedSignal = await new Promise<TradeSignal>((resolve) => {
-      channel.consume(QUEUE_NAME, async (msg) => {
+      channel.consume(QUEUE_NAME, async (msg: any) => {
         if (msg) {
           const content = msg.content.toString();
           const receivedSignal = JSON.parse(content) as TradeSignal;
@@ -211,7 +211,7 @@ describe('Trading Flow Integration', () => {
     const processedSignals: TradeSignal[] = [];
     for (let i = 0; i < signals.length; i++) {
       const signal = await new Promise<TradeSignal>((resolve) => {
-        channel.consume(QUEUE_NAME, async (msg) => {
+        channel.consume(QUEUE_NAME, async (msg: any) => {
           if (msg) {
             const content = msg.content.toString();
             const receivedSignal = JSON.parse(content) as TradeSignal;
