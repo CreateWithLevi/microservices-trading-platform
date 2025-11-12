@@ -6,6 +6,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-18-green.svg)](https://nodejs.org/)
 [![Docker](https://img.shields.io/badge/Docker-compose-blue.svg)](https://www.docker.com/)
 [![RabbitMQ](https://img.shields.io/badge/RabbitMQ-3.13-orange.svg)](https://www.rabbitmq.com/)
+[![Redis](https://img.shields.io/badge/Redis-7-red.svg)](https://redis.io/)
 
 ## 🎯 Project Overview
 
@@ -33,10 +34,10 @@ This project demonstrates enterprise-level patterns for building scalable, low-l
          │
          │ Distributes messages
          ▼
-┌─────────────────┐
-│   Service B     │  Trade Execution Engine
-│  (Consumer x5)  │  Processes signals in parallel
-└─────────────────┘
+┌─────────────────┐       ┌─────────────────┐
+│   Service B     │◄─────►│     Redis       │  In-Memory Cache
+│  (Consumer x5)  │       │   (Cache/Store) │  Price caching + Trade history
+└─────────────────┘       └─────────────────┘
 ```
 
 ### Current Components
@@ -45,7 +46,8 @@ This project demonstrates enterprise-level patterns for building scalable, low-l
 |---------|------|------------|-------------|
 | **Service A** | Signal Generator | TypeScript + Node.js | Single instance |
 | **RabbitMQ** | Message Queue | RabbitMQ 3.13 | Clusterable |
-| **Service B** | Execution Engine | TypeScript + Node.js | **Horizontally scalable** |
+| **Redis** | Cache & Data Store | Redis 7 Alpine | Single instance (clusterable) |
+| **Service B** | Execution Engine | TypeScript + Node.js + ioredis | **Horizontally scalable** |
 
 ## 🚀 Key Features
 
@@ -53,6 +55,8 @@ This project demonstrates enterprise-level patterns for building scalable, low-l
 
 - **Asynchronous Processing**: Non-blocking I/O with async/await patterns
 - **Message Queue**: RabbitMQ for reliable message delivery
+- **Redis Caching**: Cache-aside pattern for asset prices with 30s TTL
+- **Trade History**: Last 100 trades stored in Redis lists
 - **Horizontal Scaling**: Scale consumers from 1 to N instances
 - **Load Balancing**: Automatic round-robin distribution
 - **Containerization**: Multi-stage Docker builds for optimal image size
@@ -62,10 +66,11 @@ This project demonstrates enterprise-level patterns for building scalable, low-l
 
 ### 🔜 Roadmap
 
-- [ ] **Redis Integration**: Caching layer for low-latency reads
-  - Cache market prices
-  - Implement cache invalidation strategies
-  - Use Redis Sorted Sets for time-series data
+- [x] **Redis Integration**: Caching layer for low-latency reads
+  - ✅ Cache market prices with TTL
+  - ✅ Store trade history in Redis lists
+  - ✅ Track trade counters per asset
+  - [ ] Use Redis Sorted Sets for time-series data
 
 - [ ] **gRPC Service**: Low-latency synchronous communication
   - Portfolio management service
@@ -91,6 +96,7 @@ This project demonstrates enterprise-level patterns for building scalable, low-l
 - **Language**: TypeScript 5.4
 - **Runtime**: Node.js 18 (Alpine)
 - **Message Broker**: RabbitMQ 3.13 with Management UI
+- **Cache & Storage**: Redis 7 (Alpine) with AOF persistence
 - **Containerization**: Docker + Docker Compose
 - **Architecture**: Microservices, Event-driven
 
@@ -123,12 +129,15 @@ docker compose down
 # Terminal 1: Start RabbitMQ
 docker run -d --name rabbitmq-dev -p 5672:5672 -p 15672:15672 rabbitmq:3-management
 
-# Terminal 2: Service A
+# Terminal 2: Start Redis
+docker run -d --name redis-dev -p 6379:6379 redis:7-alpine
+
+# Terminal 3: Service A
 cd service-a
 npm install
 npm start
 
-# Terminal 3: Service B
+# Terminal 4: Service B
 cd service-b
 npm install
 npm start
@@ -140,6 +149,18 @@ npm start
   - Username: `guest`
   - Password: `guest`
   - View queues, message rates, and consumer connections
+
+- **Redis CLI**: Inspect cache and trade data
+  ```bash
+  # Connect to Redis container
+  docker exec -it redis redis-cli
+
+  # Example commands:
+  GET price:BATTERY_GRID_01           # View cached asset price
+  LRANGE trade_history 0 9            # View last 10 trades
+  GET trade_count:BATTERY_GRID_01     # View trade count
+  TTL price:BATTERY_GRID_01           # Check cache TTL
+  ```
 
 ## 🎓 Learning Outcomes
 
@@ -154,6 +175,7 @@ This project demonstrates proficiency in:
 ### Optimizing
 - Performance tuning for low-latency systems
 - Message queue optimization
+- Redis caching strategies (cache-aside pattern)
 - Container image optimization (multi-stage builds)
 - Memory-efficient processing
 
@@ -170,7 +192,8 @@ This project demonstrates proficiency in:
 With 5 Service B instances:
 - **Throughput**: ~1 message/3 seconds per producer
 - **Latency**: <50ms processing time per message
-- **Scalability**: Linear scaling with consumer count
+- **Cache Performance**: Sub-millisecond reads from Redis
+- **Scalability**: Linear scaling with consumer count (shared Redis cache)
 - **Reliability**: At-least-once delivery guarantee
 
 ## 🔧 Configuration
@@ -182,6 +205,11 @@ With 5 Service B instances:
 RABBITMQ_URL=amqp://rabbitmq  # Docker network
 # or
 RABBITMQ_URL=amqp://localhost  # Local development
+
+# Service B only
+REDIS_URL=redis://redis:6379  # Docker network
+# or
+REDIS_URL=redis://localhost:6379  # Local development
 ```
 
 ## 📝 Project Structure
