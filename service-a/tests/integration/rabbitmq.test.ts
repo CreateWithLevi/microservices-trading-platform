@@ -65,11 +65,7 @@ describe('RabbitMQ Integration', () => {
   });
 
   it('should handle multiple messages in order', async () => {
-    const signals = [
-      generateMockSignal(),
-      generateMockSignal(),
-      generateMockSignal(),
-    ];
+    const signals = [generateMockSignal(), generateMockSignal(), generateMockSignal()];
 
     // Publish all messages
     for (const signal of signals) {
@@ -100,26 +96,24 @@ describe('RabbitMQ Integration', () => {
     const invalidMessage = 'not valid json';
     channel.sendToQueue(QUEUE_NAME, Buffer.from(invalidMessage));
 
-    const result = await new Promise<{ valid: boolean; error?: string }>(
-      (resolve) => {
-        channel.consume(QUEUE_NAME, (msg: any) => {
-          if (msg) {
-            try {
-              const content = msg.content.toString();
-              JSON.parse(content);
-              channel.ack(msg);
-              resolve({ valid: true });
-            } catch (error) {
-              channel.nack(msg, false, false); // Don't requeue
-              resolve({
-                valid: false,
-                error: error instanceof Error ? error.message : 'Unknown error',
-              });
-            }
+    const result = await new Promise<{ valid: boolean; error?: string }>((resolve) => {
+      channel.consume(QUEUE_NAME, (msg: any) => {
+        if (msg) {
+          try {
+            const content = msg.content.toString();
+            JSON.parse(content);
+            channel.ack(msg);
+            resolve({ valid: true });
+          } catch (error) {
+            channel.nack(msg, false, false); // Don't requeue
+            resolve({
+              valid: false,
+              error: error instanceof Error ? error.message : 'Unknown error',
+            });
           }
-        });
-      }
-    );
+        }
+      });
+    });
 
     expect(result.valid).toBe(false);
     expect(result.error).toBeDefined();

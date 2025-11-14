@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type Redis from 'ioredis';
-import { getAssetPrice, storeTradeHistory, calculateTradeValue, type TradeSignal } from '../../src/trading';
+import {
+  getAssetPrice,
+  storeTradeHistory,
+  calculateTradeValue,
+  type TradeSignal,
+} from '../../src/trading';
 
 describe('trading', () => {
   describe('calculateTradeValue', () => {
@@ -46,11 +51,7 @@ describe('trading', () => {
       expect(price).toBeGreaterThanOrEqual(50);
       expect(price).toBeLessThanOrEqual(150);
       expect(mockRedis.get).toHaveBeenCalledWith('price:ASSET_456');
-      expect(mockRedis.setex).toHaveBeenCalledWith(
-        'price:ASSET_456',
-        30,
-        expect.any(String)
-      );
+      expect(mockRedis.setex).toHaveBeenCalledWith('price:ASSET_456', 30, expect.any(String));
     });
 
     it('should cache price for 30 seconds', async () => {
@@ -59,11 +60,7 @@ describe('trading', () => {
 
       await getAssetPrice(mockRedis as Redis, 'ASSET_789');
 
-      expect(mockRedis.setex).toHaveBeenCalledWith(
-        'price:ASSET_789',
-        30,
-        expect.any(String)
-      );
+      expect(mockRedis.setex).toHaveBeenCalledWith('price:ASSET_789', 30, expect.any(String));
     });
   });
 
@@ -101,7 +98,7 @@ describe('trading', () => {
     });
 
     it('should include price and totalValue in trade record', async () => {
-      const price = 75.50;
+      const price = 75.5;
       (mockRedis.lpush as any).mockResolvedValue(1);
       (mockRedis.ltrim as any).mockResolvedValue('OK');
       (mockRedis.incr as any).mockResolvedValue(1);
@@ -111,7 +108,7 @@ describe('trading', () => {
       const callArg = (mockRedis.lpush as any).mock.calls[0][1];
       const tradeRecord = JSON.parse(callArg);
 
-      expect(tradeRecord.price).toBe(75.50);
+      expect(tradeRecord.price).toBe(75.5);
       expect(tradeRecord.totalValue).toBe('3812.75'); // 50.5 * 75.50
     });
 

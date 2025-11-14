@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { generateMockSignal, createTradeSignal, type TradeSignal } from '../../src/signals';
+import { generateMockSignal, createTradeSignal } from '../../src/signals';
 
 describe('signals', () => {
   describe('generateMockSignal', () => {
