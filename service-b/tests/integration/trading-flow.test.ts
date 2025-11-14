@@ -231,7 +231,9 @@ describe('Trading Flow Integration', () => {
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
         reject(
-          new Error(`Timeout: Only processed ${processedSignals.length} of ${signals.length} messages`)
+          new Error(
+            `Timeout: Only processed ${processedSignals.length} of ${signals.length} messages`
+          )
         );
       }, 10000);
 
