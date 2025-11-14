@@ -77,7 +77,7 @@ This project demonstrates enterprise-level patterns for building scalable, low-l
   - ✅ Unit tests with Vitest and mocking
   - ✅ Integration tests with testcontainers
   - ✅ ESLint and Prettier configuration
-  - [ ] GitHub Actions CI/CD pipeline
+  - ✅ GitHub Actions CI/CD pipeline
   - [ ] Git hooks with Husky
 
 - [ ] **gRPC Service**: Low-latency synchronous communication
@@ -322,17 +322,17 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for:
 
 ## 🤝 Future Enhancements
 
-### Phase 3: CI/CD Pipeline
-- GitHub Actions workflows
-- Automated testing on PR
-- Docker image publishing
+### Phase 1: Git Hooks
+- Add Husky for pre-commit hooks
+- Enforce linting and formatting before commits
+- Run type checks automatically
 
-### Phase 4: gRPC Services
+### Phase 2: gRPC Services
 - Add portfolio management service
 - Implement bi-directional streaming
 - Compare REST vs gRPC performance
 
-### Phase 5: Observability
+### Phase 3: Observability
 - Add Prometheus metrics
 - Create Grafana dashboards
 - Implement distributed tracing with Jaeger
