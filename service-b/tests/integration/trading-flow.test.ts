@@ -181,6 +181,9 @@ describe('Trading Flow Integration', () => {
   });
 
   it('should handle concurrent message processing', async () => {
+    // Purge queue first to ensure it's empty
+    await channel.purgeQueue(QUEUE_NAME);
+
     const signals: TradeSignal[] = [
       {
         assetId: 'CONCURRENT_01',
@@ -221,6 +224,9 @@ describe('Trading Flow Integration', () => {
       },
       { noAck: false }
     );
+
+    // Give consumer time to register
+    await new Promise((resolve) => setTimeout(resolve, 200));
 
     // Publish all signals
     for (const signal of signals) {
