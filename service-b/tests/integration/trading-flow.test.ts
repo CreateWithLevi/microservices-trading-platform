@@ -139,10 +139,12 @@ describe('Trading Flow Integration', () => {
       timestamp: new Date().toISOString(),
     };
 
-    let consumerTag: string;
-
     // 2. Consume signal from RabbitMQ (simulating Service B)
-    const processedSignal = await new Promise<TradeSignal>((resolve) => {
+    const { processedSignal, consumerTag } = await new Promise<{
+      processedSignal: TradeSignal;
+      consumerTag: string;
+    }>((resolve) => {
+      let tag: string;
       void channel
         .consume(
           QUEUE_NAME,
@@ -158,13 +160,13 @@ describe('Trading Flow Integration', () => {
               await storeTradeHistory(redis, receivedSignal, price);
 
               channel.ack(msg);
-              resolve(receivedSignal);
+              resolve({ processedSignal: receivedSignal, consumerTag: tag });
             }
           },
           { noAck: false }
         )
         .then((result: any) => {
-          consumerTag = result.consumerTag;
+          tag = result.consumerTag;
           // 1. Publish signal to RabbitMQ (simulating Service A)
           channel.sendToQueue(QUEUE_NAME, Buffer.from(JSON.stringify(signal)));
         });
