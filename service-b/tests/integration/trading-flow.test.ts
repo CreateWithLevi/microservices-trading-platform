@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import amqp, { type Connection, type Channel } from 'amqplib';
+import amqp from 'amqplib';
 import Redis from 'ioredis';
 import { GenericContainer, type StartedTestContainer } from 'testcontainers';
 import {
@@ -12,8 +12,8 @@ import {
 describe('Trading Flow Integration', () => {
   let rabbitContainer: StartedTestContainer;
   let redisContainer: StartedTestContainer;
-  let connection: Connection;
-  let channel: Channel;
+  let connection: any;
+  let channel: any;
   let redis: Redis;
   const QUEUE_NAME = 'trading_signals';
 
@@ -139,27 +139,41 @@ describe('Trading Flow Integration', () => {
       timestamp: new Date().toISOString(),
     };
 
-    // 1. Publish signal to RabbitMQ (simulating Service A)
-    channel.sendToQueue(QUEUE_NAME, Buffer.from(JSON.stringify(signal)));
-
     // 2. Consume signal from RabbitMQ (simulating Service B)
-    const processedSignal = await new Promise<TradeSignal>((resolve) => {
-      channel.consume(QUEUE_NAME, async (msg) => {
-        if (msg) {
-          const content = msg.content.toString();
-          const receivedSignal = JSON.parse(content) as TradeSignal;
+    const { processedSignal, consumerTag } = await new Promise<{
+      processedSignal: TradeSignal;
+      consumerTag: string;
+    }>((resolve) => {
+      let tag: string;
+      void channel
+        .consume(
+          QUEUE_NAME,
+          async (msg: any) => {
+            if (msg) {
+              const content = msg.content.toString();
+              const receivedSignal = JSON.parse(content) as TradeSignal;
 
-          // 3. Get price from Redis cache
-          const price = await getAssetPrice(redis, receivedSignal.assetId);
+              // 3. Get price from Redis cache
+              const price = await getAssetPrice(redis, receivedSignal.assetId);
 
-          // 4. Store trade in Redis
-          await storeTradeHistory(redis, receivedSignal, price);
+              // 4. Store trade in Redis
+              await storeTradeHistory(redis, receivedSignal, price);
 
-          channel.ack(msg);
-          resolve(receivedSignal);
-        }
-      });
+              channel.ack(msg);
+              resolve({ processedSignal: receivedSignal, consumerTag: tag });
+            }
+          },
+          { noAck: false }
+        )
+        .then((result: any) => {
+          tag = result.consumerTag;
+          // 1. Publish signal to RabbitMQ (simulating Service A)
+          channel.sendToQueue(QUEUE_NAME, Buffer.from(JSON.stringify(signal)));
+        });
     });
+
+    // Cancel consumer
+    await channel.cancel(consumerTag);
 
     expect(processedSignal).toEqual(signal);
 
@@ -181,6 +195,9 @@ describe('Trading Flow Integration', () => {
   });
 
   it('should handle concurrent message processing', async () => {
+    // Purge queue first to ensure it's empty
+    await channel.purgeQueue(QUEUE_NAME);
+
     const signals: TradeSignal[] = [
       {
         assetId: 'CONCURRENT_01',
@@ -202,30 +219,55 @@ describe('Trading Flow Integration', () => {
       },
     ];
 
+    const processedSignals: TradeSignal[] = [];
+
+    // Set up a single consumer to handle all messages
+    const consumeResult = await channel.consume(
+      QUEUE_NAME,
+      async (msg: any) => {
+        if (msg) {
+          const content = msg.content.toString();
+          const receivedSignal = JSON.parse(content) as TradeSignal;
+
+          const price = await getAssetPrice(redis, receivedSignal.assetId);
+          await storeTradeHistory(redis, receivedSignal, price);
+
+          channel.ack(msg);
+          processedSignals.push(receivedSignal);
+        }
+      },
+      { noAck: false }
+    );
+
+    // Give consumer time to register
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
     // Publish all signals
     for (const signal of signals) {
       channel.sendToQueue(QUEUE_NAME, Buffer.from(JSON.stringify(signal)));
     }
 
-    // Process all signals concurrently
-    const processedSignals: TradeSignal[] = [];
-    for (let i = 0; i < signals.length; i++) {
-      const signal = await new Promise<TradeSignal>((resolve) => {
-        channel.consume(QUEUE_NAME, async (msg) => {
-          if (msg) {
-            const content = msg.content.toString();
-            const receivedSignal = JSON.parse(content) as TradeSignal;
+    // Wait for all messages to be processed
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(
+          new Error(
+            `Timeout: Only processed ${processedSignals.length} of ${signals.length} messages`
+          )
+        );
+      }, 10000);
 
-            const price = await getAssetPrice(redis, receivedSignal.assetId);
-            await storeTradeHistory(redis, receivedSignal, price);
+      const checkInterval = setInterval(() => {
+        if (processedSignals.length === signals.length) {
+          clearInterval(checkInterval);
+          clearTimeout(timeout);
+          resolve();
+        }
+      }, 100);
+    });
 
-            channel.ack(msg);
-            resolve(receivedSignal);
-          }
-        });
-      });
-      processedSignals.push(signal);
-    }
+    // Cancel consumer
+    await channel.cancel(consumeResult.consumerTag);
 
     expect(processedSignals).toHaveLength(signals.length);
     expect(processedSignals).toEqual(signals);
@@ -236,7 +278,7 @@ describe('Trading Flow Integration', () => {
       expect(count).toBeDefined();
       expect(parseInt(count as string)).toBeGreaterThan(0);
     }
-  });
+  }, 15000);
 
   it('should handle price cache expiration', async () => {
     const assetId = 'EXPIRY_TEST_ASSET';
