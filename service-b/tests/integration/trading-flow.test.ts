@@ -139,27 +139,39 @@ describe('Trading Flow Integration', () => {
       timestamp: new Date().toISOString(),
     };
 
-    // 1. Publish signal to RabbitMQ (simulating Service A)
-    channel.sendToQueue(QUEUE_NAME, Buffer.from(JSON.stringify(signal)));
+    let consumerTag: string;
 
     // 2. Consume signal from RabbitMQ (simulating Service B)
     const processedSignal = await new Promise<TradeSignal>((resolve) => {
-      channel.consume(QUEUE_NAME, async (msg: any) => {
-        if (msg) {
-          const content = msg.content.toString();
-          const receivedSignal = JSON.parse(content) as TradeSignal;
+      void channel
+        .consume(
+          QUEUE_NAME,
+          async (msg: any) => {
+            if (msg) {
+              const content = msg.content.toString();
+              const receivedSignal = JSON.parse(content) as TradeSignal;
 
-          // 3. Get price from Redis cache
-          const price = await getAssetPrice(redis, receivedSignal.assetId);
+              // 3. Get price from Redis cache
+              const price = await getAssetPrice(redis, receivedSignal.assetId);
 
-          // 4. Store trade in Redis
-          await storeTradeHistory(redis, receivedSignal, price);
+              // 4. Store trade in Redis
+              await storeTradeHistory(redis, receivedSignal, price);
 
-          channel.ack(msg);
-          resolve(receivedSignal);
-        }
-      });
+              channel.ack(msg);
+              resolve(receivedSignal);
+            }
+          },
+          { noAck: false }
+        )
+        .then((result: any) => {
+          consumerTag = result.consumerTag;
+          // 1. Publish signal to RabbitMQ (simulating Service A)
+          channel.sendToQueue(QUEUE_NAME, Buffer.from(JSON.stringify(signal)));
+        });
     });
+
+    // Cancel consumer
+    await channel.cancel(consumerTag);
 
     expect(processedSignal).toEqual(signal);
 
