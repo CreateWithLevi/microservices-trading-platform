@@ -103,131 +103,123 @@ describe('RabbitMQ Integration', () => {
     await channel.purgeQueue(QUEUE_NAME);
   });
 
-  it(
-    'should handle multiple messages in order',
-    async () => {
-      // Assert queue for this test
-      await channel.assertQueue(QUEUE_NAME, { durable: false });
-      await channel.purgeQueue(QUEUE_NAME); // Ensure queue is empty
+  it('should handle multiple messages in order', async () => {
+    // Assert queue for this test
+    await channel.assertQueue(QUEUE_NAME, { durable: false });
+    await channel.purgeQueue(QUEUE_NAME); // Ensure queue is empty
 
-      const signals = [generateMockSignal(), generateMockSignal(), generateMockSignal()];
-      const receivedSignals: TradeSignal[] = [];
+    const signals = [generateMockSignal(), generateMockSignal(), generateMockSignal()];
+    const receivedSignals: TradeSignal[] = [];
 
-      // Set up consumer first and get consumerTag
-      const consumeResult = await channel.consume(
-        QUEUE_NAME,
-        (msg: any) => {
-          if (msg) {
-            try {
-              const content = msg.content.toString();
-              const parsedSignal = JSON.parse(content) as TradeSignal;
-              channel.ack(msg);
-              receivedSignals.push(parsedSignal);
-            } catch (error) {
-              // Skip invalid messages from previous tests
-              channel.nack(msg, false, false);
-            }
+    // Set up consumer first and get consumerTag
+    const consumeResult = await channel.consume(
+      QUEUE_NAME,
+      (msg: any) => {
+        if (msg) {
+          try {
+            const content = msg.content.toString();
+            const parsedSignal = JSON.parse(content) as TradeSignal;
+            channel.ack(msg);
+            receivedSignals.push(parsedSignal);
+          } catch (error) {
+            // Skip invalid messages from previous tests
+            channel.nack(msg, false, false);
           }
-        },
-        { noAck: false }
-      );
+        }
+      },
+      { noAck: false }
+    );
 
-      // Publish all messages
-      for (const signal of signals) {
-        channel.sendToQueue(QUEUE_NAME, Buffer.from(JSON.stringify(signal)));
-      }
+    // Publish all messages
+    for (const signal of signals) {
+      channel.sendToQueue(QUEUE_NAME, Buffer.from(JSON.stringify(signal)));
+    }
 
-      // Wait for all messages to be received
-      await new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(
-            new Error(
-              `Timeout: Only received ${receivedSignals.length} of ${signals.length} messages`
-            )
-          );
-        }, 5000);
+    // Wait for all messages to be received
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(
+          new Error(
+            `Timeout: Only received ${receivedSignals.length} of ${signals.length} messages`
+          )
+        );
+      }, 5000);
 
-        const checkInterval = setInterval(() => {
-          if (receivedSignals.length === signals.length) {
-            clearInterval(checkInterval);
-            clearTimeout(timeout);
-            resolve();
+      const checkInterval = setInterval(() => {
+        if (receivedSignals.length === signals.length) {
+          clearInterval(checkInterval);
+          clearTimeout(timeout);
+          resolve();
+        }
+      }, 100);
+    });
+
+    // Cancel consumer
+    await channel.cancel(consumeResult.consumerTag);
+
+    expect(receivedSignals).toHaveLength(signals.length);
+    expect(receivedSignals).toEqual(signals);
+
+    // Clean up
+    await channel.purgeQueue(QUEUE_NAME);
+  }, 10000);
+
+  it('should reject invalid JSON messages', async () => {
+    // Assert queue for this test
+    await channel.assertQueue(QUEUE_NAME, { durable: false });
+    await channel.purgeQueue(QUEUE_NAME); // Ensure queue is empty
+
+    const invalidMessage = 'not valid json';
+    let result: { valid: boolean; error?: string } | null = null;
+
+    // Set up consumer first and get consumerTag
+    const consumeResult = await channel.consume(
+      QUEUE_NAME,
+      (msg: any) => {
+        if (msg) {
+          try {
+            const content = msg.content.toString();
+            JSON.parse(content);
+            channel.ack(msg);
+            result = { valid: true };
+          } catch (error) {
+            channel.nack(msg, false, false); // Don't requeue
+            result = {
+              valid: false,
+              error: error instanceof Error ? error.message : 'Unknown error',
+            };
           }
-        }, 100);
-      });
+        }
+      },
+      { noAck: false }
+    );
 
-      // Cancel consumer
-      await channel.cancel(consumeResult.consumerTag);
+    // Publish invalid message
+    channel.sendToQueue(QUEUE_NAME, Buffer.from(invalidMessage));
 
-      expect(receivedSignals).toHaveLength(signals.length);
-      expect(receivedSignals).toEqual(signals);
+    // Wait for message to be processed
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error(`Timeout: Message was not processed. Result: ${JSON.stringify(result)}`));
+      }, 5000);
 
-      // Clean up
-      await channel.purgeQueue(QUEUE_NAME);
-    },
-    10000
-  );
+      const checkInterval = setInterval(() => {
+        if (result !== null) {
+          clearInterval(checkInterval);
+          clearTimeout(timeout);
+          resolve();
+        }
+      }, 100);
+    });
 
-  it(
-    'should reject invalid JSON messages',
-    async () => {
-      // Assert queue for this test
-      await channel.assertQueue(QUEUE_NAME, { durable: false });
-      await channel.purgeQueue(QUEUE_NAME); // Ensure queue is empty
+    // Cancel consumer
+    await channel.cancel(consumeResult.consumerTag);
 
-      const invalidMessage = 'not valid json';
-      let result: { valid: boolean; error?: string } | null = null;
+    expect(result).not.toBeNull();
+    expect(result!.valid).toBe(false);
+    expect(result!.error).toBeDefined();
 
-      // Set up consumer first and get consumerTag
-      const consumeResult = await channel.consume(
-        QUEUE_NAME,
-        (msg: any) => {
-          if (msg) {
-            try {
-              const content = msg.content.toString();
-              JSON.parse(content);
-              channel.ack(msg);
-              result = { valid: true };
-            } catch (error) {
-              channel.nack(msg, false, false); // Don't requeue
-              result = {
-                valid: false,
-                error: error instanceof Error ? error.message : 'Unknown error',
-              };
-            }
-          }
-        },
-        { noAck: false }
-      );
-
-      // Publish invalid message
-      channel.sendToQueue(QUEUE_NAME, Buffer.from(invalidMessage));
-
-      // Wait for message to be processed
-      await new Promise<void>((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error(`Timeout: Message was not processed. Result: ${JSON.stringify(result)}`));
-        }, 5000);
-
-        const checkInterval = setInterval(() => {
-          if (result !== null) {
-            clearInterval(checkInterval);
-            clearTimeout(timeout);
-            resolve();
-          }
-        }, 100);
-      });
-
-      // Cancel consumer
-      await channel.cancel(consumeResult.consumerTag);
-
-      expect(result).not.toBeNull();
-      expect(result!.valid).toBe(false);
-      expect(result!.error).toBeDefined();
-
-      // Clean up
-      await channel.purgeQueue(QUEUE_NAME);
-    },
-    10000
-  );
+    // Clean up
+    await channel.purgeQueue(QUEUE_NAME);
+  }, 10000);
 });
