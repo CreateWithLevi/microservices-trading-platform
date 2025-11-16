@@ -351,12 +351,54 @@ npm run format      # Format code
 npm test            # Run all tests
 ```
 
+## CI/CD Pipeline
+
+### GitHub Actions Workflow
+The project includes a comprehensive CI/CD pipeline (`.github/workflows/ci.yml`) that runs on:
+- Push to `main` or `develop` branches
+- Pull requests to `main` or `develop` branches
+
+**Pipeline Jobs** (run in parallel):
+1. **Service A - Test & Lint**:
+   - Runs unit tests with Vitest
+   - Runs integration tests with testcontainers (RabbitMQ)
+   - Performs ESLint checks
+   - Performs Prettier formatting checks
+   - Runs TypeScript type checking
+   - Generates coverage report (non-blocking)
+
+2. **Service B - Test & Lint**:
+   - Runs unit tests with Vitest
+   - Runs integration tests with testcontainers (RabbitMQ + Redis)
+   - Performs ESLint checks
+   - Performs Prettier formatting checks
+   - Runs TypeScript type checking
+   - Generates coverage report (non-blocking)
+
+3. **Docker Build Test**:
+   - Builds both service Docker images
+   - Validates multi-stage build process
+   - Tests Docker Compose configuration
+
+**Key CI Features**:
+- Parallel job execution for faster feedback
+- Comprehensive test coverage (unit + integration)
+- Automated code quality checks (lint + format + type-check)
+- Docker build validation
+- Coverage reporting (non-blocking to not fail CI)
+
+**Common CI Issues & Fixes**:
+- **Prettier formatting errors**: Run `npm run lint:fix` to auto-fix
+- **Integration test timeouts**: Ensure proper consumer lifecycle management (cancel consumers after tests)
+- **RabbitMQ consumer interference**: Always purge queues before tests and cancel consumers with `channel.cancel(consumerTag)`
+- **TypeScript errors**: Run `npm run type-check` locally before committing
+
 ## Future Roadmap
 Per README, planned integrations include:
 - ✅ Redis caching layer for market data (COMPLETED)
 - ✅ Unit and integration tests with Vitest and testcontainers (COMPLETED)
 - ✅ ESLint and Prettier configuration (COMPLETED)
-- GitHub Actions CI/CD pipeline (IN PROGRESS)
+- ✅ GitHub Actions CI/CD pipeline (COMPLETED)
 - Git hooks with Husky for pre-commit checks (PLANNED)
 - gRPC service for portfolio management (PLANNED)
 - API Gateway (Kong) with rate limiting (PLANNED)
