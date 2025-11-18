@@ -28,13 +28,17 @@ redis.on('error', (err: Error) => {
  * Process trade with Redis integration
  */
 async function processTrade(signal: TradeSignal): Promise<void> {
-  console.log(`[Service B] Processing signal: ${signal.action} ${signal.volume} MWh for ${signal.assetId}`);
+  console.log(
+    `[Service B] Processing signal: ${signal.action} ${signal.volume} MWh for ${signal.assetId}`
+  );
 
   // Get asset price from Redis cache
   const price = await getAssetPrice(redis, signal.assetId);
   const totalValue = (signal.volume * price).toFixed(2);
 
-  console.log(`[Service B] Trade details: ${signal.action} ${signal.volume} MWh @ $${price}/MWh = $${totalValue}`);
+  console.log(
+    `[Service B] Trade details: ${signal.action} ${signal.volume} MWh @ $${price}/MWh = $${totalValue}`
+  );
 
   // Store trade in Redis
   await storeTradeHistory(redis, signal, price);
@@ -48,7 +52,7 @@ async function processTrade(signal: TradeSignal): Promise<void> {
 /**
  * Main function: Connect and consume messages
  */
-async function startConsumer() {
+async function startConsumer(): Promise<void> {
   try {
     // 1. Connect to RabbitMQ server
     const connection = await amqp.connect(RABBITMQ_URL);
@@ -61,36 +65,44 @@ async function startConsumer() {
 
     // 3. Consume messages from the queue
     // This sets up a listener
-    channel.consume(QUEUE_NAME, async (msg) => {
-      if (msg) {
-        try {
-          // Message content is a Buffer, need to convert to string, then parse
-          const content = msg.content.toString();
-          const signal = JSON.parse(content) as TradeSignal;
+    await channel.consume(
+      QUEUE_NAME,
+      (msg) => {
+        if (msg) {
+          try {
+            // Message content is a Buffer, need to convert to string, then parse
+            const content = msg.content.toString();
+            const signal = JSON.parse(content) as TradeSignal;
 
-          // Process our business logic
-          await processTrade(signal);
-
-          // 4. (IMPORTANT) Acknowledge the message (Ack)
-          // Tell RabbitMQ we've successfully processed this message, it can be deleted
-          channel.ack(msg);
-
-        } catch (error) {
-          console.error('[Service B] Error processing message:', error);
-          // If processing fails, we "reject" this message and requeue it
-          // Note: In real applications, you need more complex error handling
-          // to avoid "poison messages" that continuously retry
-          if (msg) {
-            channel.nack(msg, false, true); // (msg, all, requeue)
+            // Process our business logic
+            void processTrade(signal)
+              .then(() => {
+                // 4. (IMPORTANT) Acknowledge the message (Ack)
+                // Tell RabbitMQ we've successfully processed this message, it can be deleted
+                channel.ack(msg);
+              })
+              .catch((error) => {
+                console.error('[Service B] Error processing message:', error);
+                // If processing fails, we "reject" this message and requeue it
+                // Note: In real applications, you need more complex error handling
+                // to avoid "poison messages" that continuously retry
+                channel.nack(msg, false, true); // (msg, all, requeue)
+              });
+          } catch (error) {
+            console.error('[Service B] Error parsing message:', error);
+            // If parsing fails, reject the message
+            if (msg) {
+              channel.nack(msg, false, false); // Don't requeue malformed messages
+            }
           }
         }
+      },
+      {
+        // noAck: false (default)
+        // This means we need to manually call channel.ack() to confirm the message
+        // This is key to ensuring "high availability" and "no data loss"
       }
-    }, {
-      // noAck: false (default)
-      // This means we need to manually call channel.ack() to confirm the message
-      // This is key to ensuring "high availability" and "no data loss"
-    });
-
+    );
   } catch (error) {
     console.error('[Service B] Error occurred:', error);
     process.exit(1);
@@ -98,4 +110,7 @@ async function startConsumer() {
 }
 
 // Start the consumer
-startConsumer();
+startConsumer().catch((error) => {
+  console.error('[Service B] Fatal error during startup:', error);
+  process.exit(1);
+});

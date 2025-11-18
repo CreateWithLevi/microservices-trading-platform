@@ -8,7 +8,7 @@ const QUEUE_NAME = 'trading_signals'; // Name of the queue
 /**
  * Main function: Connect to RabbitMQ and publish messages
  */
-async function startSignalGenerator() {
+async function startSignalGenerator(): Promise<void> {
   try {
     // 1. Connect to RabbitMQ server
     const connection = await amqp.connect(RABBITMQ_URL);
@@ -33,7 +33,6 @@ async function startSignalGenerator() {
 
       console.log(`[Service A] Signal sent: ${signal.action} ${signal.volume} MWh`);
     }, 3000); // Every 3 seconds
-
   } catch (error) {
     console.error('[Service A] Error occurred:', error);
     process.exit(1); // Exit the program
@@ -41,4 +40,7 @@ async function startSignalGenerator() {
 }
 
 // Start the service
-startSignalGenerator();
+startSignalGenerator().catch((error) => {
+  console.error('[Service A] Fatal error during startup:', error);
+  process.exit(1);
+});

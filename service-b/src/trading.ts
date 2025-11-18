@@ -28,7 +28,9 @@ export async function getAssetPrice(redis: Redis, assetId: string): Promise<numb
   // Cache miss: generate a new price and cache it
   const newPrice = parseFloat((Math.random() * 100 + 50).toFixed(2)); // $50-$150
   await redis.setex(`price:${assetId}`, 30, newPrice.toString()); // Cache for 30 seconds
-  console.log(`[Service B] Cache MISS: Generated new price for ${assetId} = $${newPrice} (cached for 30s)`);
+  console.log(
+    `[Service B] Cache MISS: Generated new price for ${assetId} = $${newPrice} (cached for 30s)`
+  );
 
   return newPrice;
 }
