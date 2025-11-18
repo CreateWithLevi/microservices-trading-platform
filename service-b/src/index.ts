@@ -3,6 +3,8 @@ import amqp from 'amqplib';
 import Redis from 'ioredis';
 import { getAssetPrice, storeTradeHistory, type TradeSignal } from './trading';
 import { RiskClient } from './grpc-client';
+import { tradesProcessedTotal, processingDurationSeconds, riskChecksTotal } from './metrics';
+import { startMetricsServer } from './metrics-server';
 
 // --- Sentry Initialization ---
 // Initialize Sentry for error tracking (disabled if SENTRY_DSN not set)
@@ -61,7 +63,7 @@ const riskClient = new RiskClient(RISK_SERVICE_URL);
  * Process trade with Risk Service validation and Redis integration
  */
 async function processTrade(signal: TradeSignal): Promise<void> {
-  // Create a span to measure performance of trade processing
+  // Create a Sentry span to measure performance of trade processing
   await Sentry.startSpan(
     {
       op: 'message.process',
@@ -73,6 +75,13 @@ async function processTrade(signal: TradeSignal): Promise<void> {
       },
     },
     async () => {
+      // Start Prometheus timer for processing duration metric
+      const timer = processingDurationSeconds.startTimer({
+        action: signal.action,
+        asset_id: signal.assetId,
+        status: 'unknown', // Will be updated later
+      });
+
       console.log(
         `[Service B] Processing signal: ${signal.action} ${signal.volume} MWh for ${signal.assetId}`
       );
@@ -96,10 +105,21 @@ async function processTrade(signal: TradeSignal): Promise<void> {
             `[Service B] ⚠️  Trade REJECTED by Risk Service. Reason: ${riskCheck.reason}`
           );
           console.log(`[Service B] Trade skipped. Message acknowledged without processing.`);
+
+          // Track metrics for rejected trade
+          riskChecksTotal.inc({ result: 'rejected' });
+          tradesProcessedTotal.inc({
+            action: signal.action,
+            asset_id: signal.assetId,
+            status: 'rejected',
+          });
+          timer({ status: 'rejected' });
+
           return; // Exit early - trade will be ack'd but not stored
         }
 
         console.log(`[Service B] ✓ Trade approved by Risk Service. Proceeding...`);
+        riskChecksTotal.inc({ result: 'allowed' });
       } catch (error) {
         // If Risk Service is down or unreachable, log error and skip trade
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -119,6 +139,11 @@ async function processTrade(signal: TradeSignal): Promise<void> {
           },
         });
 
+        // Track metrics for error case
+        riskChecksTotal.inc({ result: 'error' });
+        tradesProcessedTotal.inc({ action: signal.action, asset_id: signal.assetId, status: 'error' });
+        timer({ status: 'error' });
+
         return; // Exit early - trade will be ack'd but not stored
       }
 
@@ -137,6 +162,10 @@ async function processTrade(signal: TradeSignal): Promise<void> {
       await new Promise((resolve) => setTimeout(resolve, 50)); // Simulate 50ms of work
 
       console.log(`[Service B] ...Processing complete. Trade saved to database and Redis.`);
+
+      // Track metrics for successful trade
+      tradesProcessedTotal.inc({ action: signal.action, asset_id: signal.assetId, status: 'approved' });
+      timer({ status: 'approved' });
     }
   );
 }
@@ -146,6 +175,9 @@ async function processTrade(signal: TradeSignal): Promise<void> {
  */
 async function startConsumer(): Promise<void> {
   try {
+    // 0. Start metrics server
+    startMetricsServer();
+
     // 1. Connect to Risk Service (gRPC)
     console.log('[Service B] Connecting to Risk Service...');
     riskClient.connect();
