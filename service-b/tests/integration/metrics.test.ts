@@ -21,7 +21,6 @@ describe('Metrics Endpoint Integration', () => {
     // Note: startMetricsServer returns void and starts an Express server
     // We need to capture the server instance for cleanup
     const express = await import('express');
-    const { promhttp } = await import('@opentelemetry/exporter-prometheus');
 
     const app = express.default();
 
