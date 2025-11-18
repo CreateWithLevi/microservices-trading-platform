@@ -1,7 +1,21 @@
+import * as Sentry from '@sentry/node';
 import amqp from 'amqplib';
 import Redis from 'ioredis';
 import { getAssetPrice, storeTradeHistory, type TradeSignal } from './trading';
 import { RiskClient } from './grpc-client';
+
+// --- Sentry Initialization ---
+// Initialize Sentry for error tracking (disabled if SENTRY_DSN not set)
+if (process.env.SENTRY_DSN) {
+  Sentry.init({
+    dsn: process.env.SENTRY_DSN,
+    environment: process.env.NODE_ENV || 'production',
+    tracesSampleRate: 1.0, // 100% of transactions for performance monitoring
+  });
+  console.log('[Service B] Sentry initialized successfully');
+} else {
+  console.log('[Service B] Sentry DSN not provided, error tracking disabled');
+}
 
 // --- Configuration ---
 // Must match Service A's configuration exactly
@@ -63,6 +77,20 @@ async function processTrade(signal: TradeSignal): Promise<void> {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     console.error(`[Service B] ❌ Risk Service check failed: ${errorMessage}`);
     console.log(`[Service B] Trade skipped due to Risk Service error.`);
+
+    // Capture error in Sentry
+    Sentry.captureException(error, {
+      tags: {
+        service: 'service-b',
+        operation: 'risk-check',
+      },
+      extra: {
+        assetId: signal.assetId,
+        action: signal.action,
+        volume: signal.volume,
+      },
+    });
+
     return; // Exit early - trade will be ack'd but not stored
   }
 
@@ -121,6 +149,15 @@ async function startConsumer(): Promise<void> {
               })
               .catch((error) => {
                 console.error('[Service B] Error processing message:', error);
+
+                // Capture error in Sentry
+                Sentry.captureException(error, {
+                  tags: {
+                    service: 'service-b',
+                    operation: 'process-trade',
+                  },
+                });
+
                 // If processing fails, we "reject" this message and requeue it
                 // Note: In real applications, you need more complex error handling
                 // to avoid "poison messages" that continuously retry
@@ -128,6 +165,15 @@ async function startConsumer(): Promise<void> {
               });
           } catch (error) {
             console.error('[Service B] Error parsing message:', error);
+
+            // Capture error in Sentry
+            Sentry.captureException(error, {
+              tags: {
+                service: 'service-b',
+                operation: 'parse-message',
+              },
+            });
+
             // If parsing fails, reject the message
             if (msg) {
               channel.nack(msg, false, false); // Don't requeue malformed messages
@@ -143,6 +189,17 @@ async function startConsumer(): Promise<void> {
     );
   } catch (error) {
     console.error('[Service B] Error occurred:', error);
+
+    // Capture error in Sentry
+    Sentry.captureException(error, {
+      tags: {
+        service: 'service-b',
+        operation: 'startup',
+      },
+    });
+
+    // Flush Sentry before exit
+    await Sentry.close(2000);
     process.exit(1);
   }
 }
@@ -152,19 +209,39 @@ process.on('SIGINT', () => {
   console.log('\n[Service B] Received SIGINT, shutting down gracefully...');
   riskClient.close();
   redis.disconnect();
-  process.exit(0);
+
+  // Flush Sentry events before exit (fire and forget)
+  void Sentry.close(2000).then(() => {
+    process.exit(0);
+  });
 });
 
 process.on('SIGTERM', () => {
   console.log('\n[Service B] Received SIGTERM, shutting down gracefully...');
   riskClient.close();
   redis.disconnect();
-  process.exit(0);
+
+  // Flush Sentry events before exit (fire and forget)
+  void Sentry.close(2000).then(() => {
+    process.exit(0);
+  });
 });
 
 // Start the consumer
-startConsumer().catch((error) => {
+startConsumer().catch(async (error) => {
   console.error('[Service B] Fatal error during startup:', error);
+
+  // Capture error in Sentry
+  Sentry.captureException(error, {
+    tags: {
+      service: 'service-b',
+      operation: 'fatal-startup',
+    },
+  });
+
   riskClient.close();
+
+  // Flush Sentry before exit
+  await Sentry.close(2000);
   process.exit(1);
 });
