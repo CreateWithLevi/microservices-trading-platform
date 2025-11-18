@@ -48,6 +48,8 @@ services:
       context: ./service-b           # Dockerfile context path (service-b)
       dockerfile: ../Dockerfile.node # Our shared Dockerfile
     # No container_name to allow scaling
+    ports:
+      - "3001:3001"                  # WebSocket server port
     depends_on:
       - rabbitmq
       - redis
@@ -58,6 +60,8 @@ services:
       - RABBITMQ_URL=amqp://rabbitmq
       - REDIS_URL=redis://redis:6379
       - RISK_SERVICE_URL=service-c:50051
+      - WS_PORT=3001
+      - CORS_ORIGIN=http://localhost:3000
 
   # ----------------------------------------------------
 
@@ -73,6 +77,23 @@ services:
       - trading_network
     environment:
       - GRPC_PORT=50051
+
+  # ----------------------------------------------------
+
+  # Service 6: Frontend Dashboard (Next.js)
+  frontend:
+    build:
+      context: ./frontend            # Dockerfile context path (frontend)
+      dockerfile: ./Dockerfile       # Next.js Dockerfile
+    container_name: frontend
+    ports:
+      - "3000:3000"                  # Next.js app port
+    depends_on:
+      - service-b
+    networks:
+      - trading_network
+    environment:
+      - NEXT_PUBLIC_SOCKET_URL=http://localhost:3001
 
 # ------------------------------------------------------
 

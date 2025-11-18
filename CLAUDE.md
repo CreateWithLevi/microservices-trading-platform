@@ -19,6 +19,7 @@ A microservices-based trading platform demonstrating event-driven architecture w
 - **Service B** (`service-b/`): Trade execution engine/consumer that processes signals
   - Consumes from `trading_signals` queue
   - **Validates trades with Service C via gRPC before execution**
+  - **Broadcasts trade events via WebSocket server (Socket.io) on port 3001**
   - Integrates Redis for caching asset prices and storing trade history
   - Simulates 50ms processing time per message
   - Horizontally scalable (can run multiple instances with round-robin load balancing)
@@ -42,6 +43,14 @@ A microservices-based trading platform demonstrating event-driven architecture w
   - Tracks trade counts per asset
   - Persistence enabled with AOF (Append-Only File)
 
+- **Frontend** (`frontend/`): Real-time dashboard built with Next.js 14+
+  - Displays live trade execution data via WebSocket connection
+  - Built with Next.js App Router, TypeScript, and Tailwind CSS
+  - Uses Zustand for state management
+  - Socket.io client connects to Service B's WebSocket server
+  - Real-time updates for approved and rejected trades
+  - Runs on port 3000
+
 ### Communication Flow
 1. Service A connects to RabbitMQ and asserts the `trading_signals` queue
 2. Service A publishes JSON-serialized `TradeSignal` messages as Buffers
@@ -49,18 +58,24 @@ A microservices-based trading platform demonstrating event-driven architecture w
 4. Service B instances:
    - Consume messages from RabbitMQ
    - **Call Service C via gRPC to validate trade risk**
-     - If `allowed: false` → Log rejection reason, acknowledge message, skip trade
+     - If `allowed: false` → Log rejection reason, broadcast rejection via WebSocket, acknowledge message, skip trade
      - If `allowed: true` → Proceed with execution
-     - If Service C unavailable → Log error, acknowledge message, skip trade (fail-safe)
+     - If Service C unavailable → Log error, broadcast error via WebSocket, acknowledge message, skip trade (fail-safe)
    - Check Redis cache for asset price (cache hit) or generate new price (cache miss)
    - Calculate trade value using cached price
    - Store trade record in Redis (`trade_history` list)
    - Increment trade counter in Redis
+   - **Broadcast trade result via WebSocket to all connected clients**
    - Acknowledge message to RabbitMQ on success or reject (nack) on failure
 5. Service C (when called):
    - Receives `TradeRiskRequest` via gRPC
    - Validates trade against risk rules (volume < 100 MWh, valid action, etc.)
    - Returns `TradeRiskResponse` with `allowed` boolean and reason string
+6. Frontend Dashboard:
+   - Connects to Service B's WebSocket server via Socket.io client
+   - Listens for `trade:processed` events
+   - Updates Zustand store with new trade data
+   - Renders real-time trade list with approval/rejection status
 
 ### Shared Type Definition
 Both services duplicate the `TradeSignal` type definition:
@@ -479,6 +494,165 @@ The project includes a comprehensive CI/CD pipeline (`.github/workflows/ci.yml`)
 - **RabbitMQ consumer interference**: Always purge queues before tests and cancel consumers with `channel.cancel(consumerTag)`
 - **TypeScript errors**: Run `npm run type-check` locally before committing
 
+## Real-time WebSockets & Frontend Dashboard
+
+### Overview
+The platform includes a real-time dashboard built with Next.js 14+ that displays live trade execution data via WebSocket connections. Service B acts as a Backend-for-Frontend (BFF) by running a Socket.io server alongside its RabbitMQ consumer.
+
+### Architecture
+
+**WebSocket Server (Service B):**
+- Location: `service-b/src/websocket-server.ts`
+- Framework: Socket.io
+- Port: 3001
+- CORS: Configured to allow connections from frontend (port 3000)
+- Events emitted: `trade:processed`
+
+**Frontend (Next.js):**
+- Location: `frontend/`
+- Framework: Next.js 14+ with App Router
+- Styling: Tailwind CSS
+- State Management: Zustand
+- WebSocket Client: Socket.io-client
+- Port: 3000
+
+### Implementation Details
+
+**Service B WebSocket Integration:**
+```typescript
+// WebSocket server initialization
+const wsServer = new WebSocketServer();
+wsServer.start(); // Runs on port 3001
+
+// Emit trade events after processing
+wsServer.emitTradeProcessed({
+  id: string,           // Unique trade ID
+  assetId: string,      // Asset identifier
+  action: 'BUY' | 'SELL',
+  volume: number,       // Trade volume in MWh
+  price: number,        // Asset price per MWh
+  totalValue: number,   // Calculated total value
+  timestamp: string,    // ISO timestamp
+  status: 'approved' | 'rejected',
+  rejectionReason?: string,  // Present if rejected
+  checkId?: string,     // Risk check ID from Service C
+});
+```
+
+**Frontend State Management (Zustand):**
+```typescript
+// lib/store.ts
+const useTradeStore = create<TradeStore>((set) => ({
+  trades: [],
+  connectionStatus: 'disconnected',
+  addTrade: (trade) => set((state) => ({
+    trades: [trade, ...state.trades].slice(0, 100), // Keep last 100
+  })),
+  setConnectionStatus: (status) => set({ connectionStatus: status }),
+}));
+```
+
+**Frontend WebSocket Client:**
+```typescript
+// components/RealTimeTrades.tsx
+const socket = io(SOCKET_URL, {
+  reconnectionDelay: 1000,
+  reconnection: true,
+  reconnectionAttempts: 10,
+  transports: ['websocket'],
+});
+
+socket.on('trade:processed', (trade: TradeResult) => {
+  addTrade(trade); // Update Zustand store
+});
+```
+
+### Running the Frontend
+
+**Development Mode:**
+```bash
+# Start frontend locally (requires Service B running on port 3001)
+cd frontend
+npm install
+npm run dev
+
+# Access dashboard at http://localhost:3000
+```
+
+**Docker Mode:**
+```bash
+# Start all services including frontend
+docker compose up --build
+
+# Access dashboard at http://localhost:3000
+# WebSocket connects to Service B at http://localhost:3001
+```
+
+**Environment Variables:**
+- `NEXT_PUBLIC_SOCKET_URL`: WebSocket server URL (default: `http://localhost:3001`)
+- `WS_PORT`: WebSocket server port in Service B (default: `3001`)
+- `CORS_ORIGIN`: Allowed CORS origin for WebSocket (default: `http://localhost:3000`)
+
+### Dashboard Features
+
+1. **Real-time Trade List**: Displays all processed trades with details (asset, action, volume, price, status)
+2. **Connection Status Indicator**: Shows WebSocket connection state (connected, disconnected, error)
+3. **Trade Statistics**: Live counts for total trades, approved trades, and rejected trades
+4. **Trade Status Badges**: Color-coded badges for approved (green) and rejected (red) trades
+5. **Auto-scrolling**: New trades appear at the top of the list
+6. **Rejection Reasons**: Hover over rejected trades to see rejection reason
+
+### Testing
+
+**Frontend Component Tests:**
+```bash
+cd frontend
+npm test                # Run all tests
+npm run test:ui         # Run with Vitest UI
+npm run test:coverage   # Generate coverage report
+```
+
+Tests include:
+- Component rendering verification
+- Socket event listener registration
+- Trade event handling
+- Store updates on trade reception
+- Connection status updates
+- Cleanup on unmount
+
+**Key Test Files:**
+- `tests/setup.ts`: Test configuration with Socket.io mocks
+- `tests/components/RealTimeTrades.test.tsx`: Component tests with React Testing Library
+
+### WebSocket Event Flow
+
+1. **Service B starts**: WebSocket server listens on port 3001
+2. **Frontend loads**: Socket.io client connects to Service B
+3. **Connection established**: Frontend updates connection status to "connected"
+4. **Trade processed**: Service B emits `trade:processed` event with trade data
+5. **Frontend receives**: Socket.io client triggers callback with trade data
+6. **Store updated**: Zustand store adds trade to state
+7. **UI re-renders**: React component displays updated trade list
+
+### Production Considerations
+
+**Scalability:**
+- Currently, Service B runs a single WebSocket server instance
+- For horizontal scaling, consider:
+  - Redis Pub/Sub adapter for Socket.io to share events across instances
+  - Sticky sessions for WebSocket connections
+  - Dedicated real-time service separate from Service B
+
+**Security:**
+- CORS configured to allow specific frontend origin
+- Consider adding authentication for WebSocket connections
+- Use HTTPS/WSS in production
+
+**Performance:**
+- Frontend keeps only last 100 trades in memory to prevent bloat
+- WebSocket uses binary frames for efficient data transfer
+- Reconnection logic handles temporary network issues
+
 ## Future Roadmap
 Per README, planned integrations include:
 - ✅ Redis caching layer for market data (COMPLETED)
@@ -486,6 +660,7 @@ Per README, planned integrations include:
 - ✅ ESLint and Prettier configuration (COMPLETED)
 - ✅ GitHub Actions CI/CD pipeline (COMPLETED)
 - ✅ gRPC Risk Service (Service C) in Go with client integration in Service B (COMPLETED)
+- ✅ Real-time WebSockets and Frontend Dashboard with Next.js 14+ (COMPLETED)
 - Git hooks with Husky for pre-commit checks (PLANNED)
 - gRPC service for portfolio management (PLANNED)
 - API Gateway (Kong) with rate limiting (PLANNED)
