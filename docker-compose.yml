@@ -74,6 +74,27 @@ services:
     environment:
       - GRPC_PORT=50051
 
+  # ----------------------------------------------------
+
+  # Service 6: AI Agent Service (Service D)
+  service-d:
+    build:
+      context: ./service-d           # Dockerfile context path (service-d)
+      dockerfile: ./Dockerfile       # Python FastAPI Dockerfile
+    container_name: service-d
+    ports:
+      - "8001:8001"                  # Expose FastAPI port
+    networks:
+      - trading_network
+    environment:
+      - PORT=8001
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 30s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+
 # ------------------------------------------------------
 
 # Virtual network for Docker services to communicate
