@@ -1,0 +1,78 @@
+_format_version: "3.0"
+_transform: true
+
+# Kong declarative configuration for Trading Platform API Gateway
+# This configuration sets up Kong in DB-less mode with routes to internal services
+
+services:
+  # Service A: Signal Generator/Status Service
+  # Routes requests to service-a for configuration and status endpoints
+  - name: service-a
+    url: http://service-a:3001
+    protocol: http
+    connect_timeout: 5000
+    write_timeout: 5000
+    read_timeout: 5000
+    retries: 3
+    routes:
+      - name: signals-route
+        paths:
+          - /api/signals
+        methods:
+          - GET
+        strip_path: false
+        preserve_host: false
+
+  # Service D: AI Analysis Service (Python)
+  # Routes requests to service-d for AI-powered trade analysis
+  - name: service-d
+    url: http://service-d:8001
+    protocol: http
+    connect_timeout: 10000  # Longer timeout for AI processing
+    write_timeout: 10000
+    read_timeout: 10000
+    retries: 2
+    routes:
+      - name: ai-analysis-route
+        paths:
+          - /api/ai/analyze
+        methods:
+          - POST
+        strip_path: false
+        preserve_host: false
+
+# Global plugins
+plugins:
+  # CORS plugin to allow frontend access from localhost:3000
+  - name: cors
+    config:
+      origins:
+        - http://localhost:3000
+        - http://127.0.0.1:3000
+      methods:
+        - GET
+        - POST
+        - PUT
+        - PATCH
+        - DELETE
+        - OPTIONS
+      headers:
+        - Accept
+        - Accept-Version
+        - Content-Length
+        - Content-MD5
+        - Content-Type
+        - Date
+        - X-Auth-Token
+        - Authorization
+      exposed_headers:
+        - X-Auth-Token
+      credentials: true
+      max_age: 3600
+      preflight_continue: false
+
+  # Request logging for debugging
+  - name: file-log
+    config:
+      path: /tmp/kong-requests.log
+      reopen: false

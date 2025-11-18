@@ -74,6 +74,42 @@ services:
     environment:
       - GRPC_PORT=50051
 
+  # ----------------------------------------------------
+
+  # Service 6: Kong API Gateway (DB-less mode)
+  # BFF (Backend for Frontend) pattern - routes traffic to internal services
+  kong:
+    image: kong:3.5-alpine
+    container_name: kong-gateway
+    environment:
+      # DB-less mode configuration
+      - KONG_DATABASE=off
+      - KONG_DECLARATIVE_CONFIG=/usr/local/kong/declarative/kong.yml
+      # Proxy configuration
+      - KONG_PROXY_ACCESS_LOG=/dev/stdout
+      - KONG_ADMIN_ACCESS_LOG=/dev/stdout
+      - KONG_PROXY_ERROR_LOG=/dev/stderr
+      - KONG_ADMIN_ERROR_LOG=/dev/stderr
+      # Listen addresses
+      - KONG_PROXY_LISTEN=0.0.0.0:8000
+      - KONG_ADMIN_LISTEN=0.0.0.0:8001
+    ports:
+      - "8000:8000"  # Proxy port (main API gateway endpoint)
+      - "8001:8001"  # Admin API port
+    volumes:
+      # Mount declarative configuration
+      - ./infra/kong/kong.yml:/usr/local/kong/declarative/kong.yml:ro
+    networks:
+      - trading_network
+    depends_on:
+      - service-a
+      - service-c
+    healthcheck:
+      test: ["CMD", "kong", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 # ------------------------------------------------------
 
 # Virtual network for Docker services to communicate
