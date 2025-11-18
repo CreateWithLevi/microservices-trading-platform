@@ -57,21 +57,6 @@ services:
       - RABBITMQ_URL=amqp://rabbitmq
       - REDIS_URL=redis://redis:6379
 
-  # ----------------------------------------------------
-
-  # Service 5: Risk Checker gRPC Service (Service C)
-  service-c:
-    build:
-      context: ./service-c           # Dockerfile context path (service-c)
-      dockerfile: ./Dockerfile       # Go-specific Dockerfile
-    container_name: service-c
-    ports:
-      - "50051:50051"                # Expose gRPC port
-    networks:
-      - trading_network
-    environment:
-      - GRPC_PORT=50051
-
 # ------------------------------------------------------
 
 # Virtual network for Docker services to communicate
