@@ -61,7 +61,7 @@ services:
 
   # ----------------------------------------------------
 
-  # Service 5: Risk Checker Service (Service C)
+  # Service 5: Risk Checker gRPC Service (Service C)
   service-c:
     build:
       context: ./service-c           # Dockerfile context path (service-c)
