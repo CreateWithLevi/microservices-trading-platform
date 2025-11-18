@@ -1,0 +1,78 @@
+---
+# Service B: Trade Execution Engine (Consumer)
+# Consumes from RabbitMQ, validates with Service C, integrates with Redis
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: service-b
+  namespace: trading-system
+  labels:
+    app: service-b
+    component: execution-engine
+spec:
+  replicas: 3  # Horizontally scalable (adjust as needed)
+  selector:
+    matchLabels:
+      app: service-b
+  template:
+    metadata:
+      labels:
+        app: service-b
+        component: execution-engine
+    spec:
+      containers:
+        - name: service-b
+          image: service-b:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: RABBITMQ_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: trading-platform-config
+                  key: RABBITMQ_URL
+            - name: REDIS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: trading-platform-config
+                  key: REDIS_URL
+            - name: RISK_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: trading-platform-config
+                  key: RISK_SERVICE_URL
+            - name: NODE_ENV
+              valueFrom:
+                configMapKeyRef:
+                  name: trading-platform-config
+                  key: NODE_ENV
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: trading-platform-config
+                  key: LOG_LEVEL
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - "ps aux | grep -v grep | grep node || exit 1"
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - "ps aux | grep -v grep | grep node || exit 1"
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3

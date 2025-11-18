@@ -1,0 +1,81 @@
+---
+# Frontend: Web UI / Dashboard
+# NOTE: This service does not exist in the codebase yet.
+# Update this manifest when the frontend is implemented.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: trading-system
+  labels:
+    app: frontend
+    component: web-ui
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      targetPort: 3000
+      protocol: TCP
+  selector:
+    app: frontend
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: trading-system
+  labels:
+    app: frontend
+    component: web-ui
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+        component: web-ui
+    spec:
+      containers:
+        - name: frontend
+          image: frontend:latest  # Update with actual image
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          env:
+            - name: NODE_ENV
+              valueFrom:
+                configMapKeyRef:
+                  name: trading-platform-config
+                  key: NODE_ENV
+            # Add API Gateway URL or backend service URLs
+            - name: API_BASE_URL
+              value: "http://api-gateway.trading-system.svc.cluster.local"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3

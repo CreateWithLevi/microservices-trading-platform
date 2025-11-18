@@ -1,0 +1,19 @@
+# Ignore temporary files
+*.tmp
+*.swp
+*.swo
+*~
+
+# Ignore local development files
+.DS_Store
+.idea/
+.vscode/
+
+# Ignore customized secrets (keep the template)
+# config/secret.yaml
+
+# Ignore kubectl logs
+*.log
+
+# Ignore local Kind config customizations
+kind-config-local.yaml

@@ -1,0 +1,75 @@
+---
+# Service C: Risk Checker (gRPC Service)
+# Validates trades against risk rules
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-c
+  namespace: trading-system
+  labels:
+    app: service-c
+    component: risk-checker
+spec:
+  type: ClusterIP
+  ports:
+    - name: grpc
+      port: 50051
+      targetPort: 50051
+      protocol: TCP
+  selector:
+    app: service-c
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: service-c
+  namespace: trading-system
+  labels:
+    app: service-c
+    component: risk-checker
+spec:
+  replicas: 2  # Horizontally scalable (stateless gRPC server)
+  selector:
+    matchLabels:
+      app: service-c
+  template:
+    metadata:
+      labels:
+        app: service-c
+        component: risk-checker
+    spec:
+      containers:
+        - name: service-c
+          image: service-c:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: grpc
+              containerPort: 50051
+              protocol: TCP
+          env:
+            - name: GRPC_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: trading-platform-config
+                  key: GRPC_PORT
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "100m"
+            limits:
+              memory: "128Mi"
+              cpu: "250m"
+          livenessProbe:
+            tcpSocket:
+              port: 50051
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+          readinessProbe:
+            tcpSocket:
+              port: 50051
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
