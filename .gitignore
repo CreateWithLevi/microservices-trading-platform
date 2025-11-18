@@ -39,3 +39,4 @@ coverage/
 # Docker
 .docker/
 .ci-workflow-updates.patch
+server
