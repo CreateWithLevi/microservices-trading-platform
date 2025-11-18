@@ -25,7 +25,40 @@ services:
 
   # ----------------------------------------------------
 
-  # Service 3: AI Signal Generator (Service A)
+  # Service 3: MongoDB Database
+  mongo:
+    image: mongo:6
+    container_name: mongo
+    ports:
+      - "27017:27017"
+    networks:
+      - trading_network
+    environment:
+      - MONGO_INITDB_DATABASE=audit_logs
+    volumes:
+      - mongo_data:/data/db
+
+  # ----------------------------------------------------
+
+  # Service 4: Mongo Express (MongoDB Web UI)
+  mongo-express:
+    image: mongo-express:latest
+    container_name: mongo-express
+    ports:
+      - "8081:8081"
+    networks:
+      - trading_network
+    depends_on:
+      - mongo
+    environment:
+      - ME_CONFIG_MONGODB_SERVER=mongo
+      - ME_CONFIG_MONGODB_PORT=27017
+      - ME_CONFIG_BASICAUTH_USERNAME=admin
+      - ME_CONFIG_BASICAUTH_PASSWORD=admin
+
+  # ----------------------------------------------------
+
+  # Service 5: AI Signal Generator (Service A)
   service-a:
     build:
       context: ./service-a           # Dockerfile context path (service-a)
@@ -42,7 +75,7 @@ services:
 
   # ----------------------------------------------------
 
-  # Service 4: Trade Execution Service (Service B)
+  # Service 6: Trade Execution Service (Service B)
   service-b:
     build:
       context: ./service-b           # Dockerfile context path (service-b)
@@ -61,7 +94,7 @@ services:
 
   # ----------------------------------------------------
 
-  # Service 5: Risk Checker gRPC Service (Service C)
+  # Service 7: Risk Checker gRPC Service (Service C)
   service-c:
     build:
       context: ./service-c           # Dockerfile context path (service-c)
@@ -74,9 +107,31 @@ services:
     environment:
       - GRPC_PORT=50051
 
+  # ----------------------------------------------------
+
+  # Service 8: Audit Service (Service E)
+  service-e:
+    build:
+      context: ./service-e           # Dockerfile context path (service-e)
+      dockerfile: ../Dockerfile.node # Our shared Dockerfile
+    container_name: service-e
+    depends_on:
+      - rabbitmq
+      - mongo
+    networks:
+      - trading_network
+    environment:
+      - RABBITMQ_URL=amqp://rabbitmq
+      - MONGODB_URL=mongodb://mongo:27017/audit_logs
+
 # ------------------------------------------------------
 
 # Virtual network for Docker services to communicate
 networks:
   trading_network:
     driver: bridge
+
+# Persistent volumes for data storage
+volumes:
+  mongo_data:
+    driver: local
