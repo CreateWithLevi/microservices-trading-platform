@@ -25,7 +25,25 @@ services:
 
   # ----------------------------------------------------
 
-  # Service 3: AI Signal Generator (Service A)
+  # Service 3: TimescaleDB for long-term trade storage
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: timescaledb
+    ports:
+      - "5432:5432"
+    networks:
+      - trading_network
+    environment:
+      - POSTGRES_DB=trading_platform
+      - POSTGRES_USER=trading_user
+      - POSTGRES_PASSWORD=trading_pass
+    volumes:
+      - ./timescaledb/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - timescale_data:/var/lib/postgresql/data
+
+  # ----------------------------------------------------
+
+  # Service 4: AI Signal Generator (Service A)
   service-a:
     build:
       context: ./service-a           # Dockerfile context path (service-a)
@@ -42,7 +60,7 @@ services:
 
   # ----------------------------------------------------
 
-  # Service 4: Trade Execution Service (Service B)
+  # Service 5: Trade Execution Service (Service B)
   service-b:
     build:
       context: ./service-b           # Dockerfile context path (service-b)
@@ -52,16 +70,22 @@ services:
       - rabbitmq
       - redis
       - service-c
+      - timescaledb
     networks:
       - trading_network
     environment:
       - RABBITMQ_URL=amqp://rabbitmq
       - REDIS_URL=redis://redis:6379
       - RISK_SERVICE_URL=service-c:50051
+      - TIMESCALE_HOST=timescaledb
+      - TIMESCALE_PORT=5432
+      - TIMESCALE_DATABASE=trading_platform
+      - TIMESCALE_USER=trading_user
+      - TIMESCALE_PASSWORD=trading_pass
 
   # ----------------------------------------------------
 
-  # Service 5: Risk Checker gRPC Service (Service C)
+  # Service 6: Risk Checker gRPC Service (Service C)
   service-c:
     build:
       context: ./service-c           # Dockerfile context path (service-c)
@@ -80,3 +104,8 @@ services:
 networks:
   trading_network:
     driver: bridge
+
+# Persistent volumes for data storage
+volumes:
+  timescale_data:
+    driver: local

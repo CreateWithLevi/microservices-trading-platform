@@ -2,19 +2,24 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import amqp from 'amqplib';
 import Redis from 'ioredis';
 import { GenericContainer, type StartedTestContainer } from 'testcontainers';
+import { Pool } from 'pg';
 import {
   getAssetPrice,
   storeTradeHistory,
   calculateTradeValue,
   type TradeSignal,
 } from '../../src/trading';
+import { TimescaleRepository } from '../../src/timescale-repository';
 
 describe('Trading Flow Integration', () => {
   let rabbitContainer: StartedTestContainer;
   let redisContainer: StartedTestContainer;
+  let timescaleContainer: StartedTestContainer;
   let connection: any;
   let channel: any;
   let redis: Redis;
+  let timescaleRepo: TimescaleRepository;
+  let pgPool: Pool;
   const QUEUE_NAME = 'trading_signals';
 
   beforeAll(async () => {
@@ -30,6 +35,17 @@ describe('Trading Flow Integration', () => {
       .withStartupTimeout(60000)
       .start();
 
+    // Start TimescaleDB container (PostgreSQL with TimescaleDB extension)
+    timescaleContainer = await new GenericContainer('timescale/timescaledb:latest-pg16')
+      .withExposedPorts(5432)
+      .withEnvironment({
+        POSTGRES_DB: 'trading_platform_test',
+        POSTGRES_USER: 'test_user',
+        POSTGRES_PASSWORD: 'test_pass',
+      })
+      .withStartupTimeout(120000)
+      .start();
+
     // Connect to RabbitMQ
     const rabbitMQUrl = `amqp://localhost:${rabbitContainer.getMappedPort(5672)}`;
     connection = await amqp.connect(rabbitMQUrl);
@@ -42,14 +58,62 @@ describe('Trading Flow Integration', () => {
       host: 'localhost',
       port: redisPort,
     });
-  }, 180000);
+
+    // Connect to TimescaleDB and initialize schema
+    const timescalePort = timescaleContainer.getMappedPort(5432);
+    timescaleRepo = new TimescaleRepository({
+      host: 'localhost',
+      port: timescalePort,
+      database: 'trading_platform_test',
+      user: 'test_user',
+      password: 'test_pass',
+    });
+
+    await timescaleRepo.connect();
+
+    // Initialize database schema manually (since we don't have init.sql in tests)
+    pgPool = new Pool({
+      host: 'localhost',
+      port: timescalePort,
+      database: 'trading_platform_test',
+      user: 'test_user',
+      password: 'test_pass',
+    });
+
+    // Create TimescaleDB extension and trades table
+    await pgPool.query('CREATE EXTENSION IF NOT EXISTS timescaledb');
+    await pgPool.query(`
+      CREATE TABLE IF NOT EXISTS trades (
+        trade_time TIMESTAMPTZ NOT NULL,
+        trade_id UUID DEFAULT gen_random_uuid(),
+        asset_id VARCHAR(50) NOT NULL,
+        action VARCHAR(10) NOT NULL CHECK (action IN ('BUY', 'SELL')),
+        volume DECIMAL(15, 4) NOT NULL CHECK (volume > 0),
+        price DECIMAL(15, 2) NOT NULL CHECK (price > 0),
+        total_value DECIMAL(20, 2) NOT NULL,
+        risk_check_id VARCHAR(100),
+        risk_approved BOOLEAN NOT NULL DEFAULT true,
+        processed_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        service_instance VARCHAR(100),
+        PRIMARY KEY (trade_time, trade_id)
+      )
+    `);
+
+    // Convert to hypertable
+    await pgPool.query(
+      "SELECT create_hypertable('trades', 'trade_time', if_not_exists => TRUE, chunk_time_interval => INTERVAL '1 day')"
+    );
+  }, 240000);
 
   afterAll(async () => {
     if (channel) await channel.close();
     if (connection) await connection.close();
     if (redis) await redis.quit();
+    if (timescaleRepo) await timescaleRepo.disconnect();
+    if (pgPool) await pgPool.end();
     if (rabbitContainer) await rabbitContainer.stop();
     if (redisContainer) await redisContainer.stop();
+    if (timescaleContainer) await timescaleContainer.stop();
   });
 
   it('should cache asset prices in Redis', async () => {
@@ -299,5 +363,91 @@ describe('Trading Flow Integration', () => {
     expect(price2).toBeLessThanOrEqual(150);
     // New price is randomly generated, so it's very unlikely to be exactly 99.99
     expect(price2).not.toBe(99.99);
+  });
+
+  it('should store trades in TimescaleDB for long-term analytics', async () => {
+    const signal: TradeSignal = {
+      assetId: 'TIMESCALE_TEST_ASSET',
+      action: 'BUY',
+      volume: 42.5,
+      timestamp: new Date().toISOString(),
+    };
+    const price = 105.75;
+    const riskCheckId = 'test-risk-check-123';
+
+    // Store trade using TimescaleRepository
+    await timescaleRepo.storeTradeFromSignal(signal, price, riskCheckId);
+
+    // Wait a bit for async write to complete
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    // Verify trade was written to TimescaleDB
+    const result = await pgPool.query(
+      'SELECT * FROM trades WHERE asset_id = $1 ORDER BY trade_time DESC LIMIT 1',
+      [signal.assetId]
+    );
+
+    expect(result.rows).toHaveLength(1);
+
+    const trade = result.rows[0];
+    expect(trade.asset_id).toBe(signal.assetId);
+    expect(trade.action).toBe(signal.action);
+    expect(parseFloat(trade.volume)).toBe(signal.volume);
+    expect(parseFloat(trade.price)).toBe(price);
+    expect(parseFloat(trade.total_value)).toBe(signal.volume * price);
+    expect(trade.risk_check_id).toBe(riskCheckId);
+    expect(trade.risk_approved).toBe(true);
+    expect(trade.trade_time).toBeDefined();
+    expect(trade.trade_id).toBeDefined();
+  });
+
+  it('should query trades by asset and time range from TimescaleDB', async () => {
+    const assetId = 'QUERY_TEST_ASSET';
+    const now = new Date();
+    const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+    const oneHourFromNow = new Date(now.getTime() + 60 * 60 * 1000);
+
+    // Store multiple trades for the same asset
+    const signals: TradeSignal[] = [
+      { assetId, action: 'BUY', volume: 10, timestamp: new Date().toISOString() },
+      { assetId, action: 'SELL', volume: 15, timestamp: new Date().toISOString() },
+      { assetId, action: 'BUY', volume: 20, timestamp: new Date().toISOString() },
+    ];
+
+    for (const signal of signals) {
+      await timescaleRepo.storeTradeFromSignal(signal, 100);
+    }
+
+    // Wait for async writes to complete
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    // Query trades for this asset within time range
+    const trades = await timescaleRepo.getTradesByAsset(assetId, oneHourAgo, oneHourFromNow);
+
+    expect(trades.length).toBeGreaterThanOrEqual(signals.length);
+
+    // Verify trade data
+    const retrievedAssetIds = trades.map((t) => t.assetId);
+    expect(retrievedAssetIds.every((id) => id === assetId)).toBe(true);
+  });
+
+  it('should get total trade count from TimescaleDB', async () => {
+    const initialCount = await timescaleRepo.getTradeCount();
+    expect(initialCount).toBeGreaterThanOrEqual(0);
+
+    // Store a new trade
+    const signal: TradeSignal = {
+      assetId: 'COUNT_TEST_ASSET',
+      action: 'BUY',
+      volume: 25,
+      timestamp: new Date().toISOString(),
+    };
+    await timescaleRepo.storeTradeFromSignal(signal, 100);
+
+    // Wait for async write
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    const newCount = await timescaleRepo.getTradeCount();
+    expect(newCount).toBeGreaterThan(initialCount);
   });
 });

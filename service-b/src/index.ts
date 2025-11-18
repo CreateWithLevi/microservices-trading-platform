@@ -2,6 +2,7 @@ import amqp from 'amqplib';
 import Redis from 'ioredis';
 import { getAssetPrice, storeTradeHistory, type TradeSignal } from './trading';
 import { RiskClient } from './grpc-client';
+import { createTimescaleRepository, type TimescaleRepository } from './timescale-repository';
 
 // --- Configuration ---
 // Must match Service A's configuration exactly
@@ -29,8 +30,11 @@ redis.on('error', (err: Error) => {
 // --- Risk Service Client ---
 const riskClient = new RiskClient(RISK_SERVICE_URL);
 
+// --- TimescaleDB Repository ---
+const timescaleRepo: TimescaleRepository = createTimescaleRepository();
+
 /**
- * Process trade with Risk Service validation and Redis integration
+ * Process trade with Risk Service validation, Redis caching, and TimescaleDB storage
  */
 async function processTrade(signal: TradeSignal): Promise<void> {
   console.log(
@@ -38,6 +42,7 @@ async function processTrade(signal: TradeSignal): Promise<void> {
   );
 
   // Step 1: Check trade risk with Risk Service (service-c)
+  let riskCheckId: string | undefined;
   try {
     const riskCheck = await riskClient.checkRisk({
       assetId: signal.assetId,
@@ -45,6 +50,8 @@ async function processTrade(signal: TradeSignal): Promise<void> {
       action: signal.action,
       timestamp: signal.timestamp,
     });
+
+    riskCheckId = riskCheck.checkId;
 
     console.log(
       `[Service B] Risk check result: ${riskCheck.allowed ? 'ALLOWED' : 'REJECTED'} (checkId: ${riskCheck.checkId})`
@@ -74,13 +81,23 @@ async function processTrade(signal: TradeSignal): Promise<void> {
     `[Service B] Trade details: ${signal.action} ${signal.volume} MWh @ $${price}/MWh = $${totalValue}`
   );
 
-  // Step 3: Store trade in Redis
+  // Step 3: Store trade in Redis (hot data - recent trades, counters)
   await storeTradeHistory(redis, signal, price);
+
+  // Step 4: Store trade in TimescaleDB asynchronously (cold data - long-term analytics)
+  // Fire-and-forget pattern: Don't await to maintain low latency
+  // TimescaleDB failures won't block trade processing
+  void timescaleRepo.storeTradeFromSignal(signal, price, riskCheckId).catch((err: unknown) => {
+    const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+    console.error('[Service B] TimescaleDB storage error (non-blocking):', errorMessage);
+  });
 
   // Simulate database write delay
   await new Promise((resolve) => setTimeout(resolve, 50)); // Simulate 50ms of work
 
-  console.log(`[Service B] ...Processing complete. Trade saved to database and Redis.`);
+  console.log(
+    `[Service B] ...Processing complete. Trade saved to Redis (hot) and TimescaleDB (cold).`
+  );
 }
 
 /**
@@ -92,16 +109,27 @@ async function startConsumer(): Promise<void> {
     console.log('[Service B] Connecting to Risk Service...');
     riskClient.connect();
 
-    // 2. Connect to RabbitMQ server
+    // 2. Connect to TimescaleDB
+    console.log('[Service B] Connecting to TimescaleDB...');
+    try {
+      await timescaleRepo.connect();
+    } catch (error) {
+      // Non-fatal: Continue without TimescaleDB (trades will only go to Redis)
+      console.warn(
+        '[Service B] ⚠️  TimescaleDB connection failed. Continuing without long-term storage.'
+      );
+    }
+
+    // 3. Connect to RabbitMQ server
     const connection = await amqp.connect(RABBITMQ_URL);
     const channel = await connection.createChannel();
 
-    // 3. Assert the queue (ensure it exists)
+    // 4. Assert the queue (ensure it exists)
     await channel.assertQueue(QUEUE_NAME, { durable: false });
 
     console.log('[Service B] Started successfully. Waiting for signals in the queue...');
 
-    // 4. Consume messages from the queue
+    // 5. Consume messages from the queue
     // This sets up a listener
     await channel.consume(
       QUEUE_NAME,
@@ -115,7 +143,7 @@ async function startConsumer(): Promise<void> {
             // Process our business logic
             void processTrade(signal)
               .then(() => {
-                // 5. (IMPORTANT) Acknowledge the message (Ack)
+                // 6. (IMPORTANT) Acknowledge the message (Ack)
                 // Tell RabbitMQ we've successfully processed this message, it can be deleted
                 channel.ack(msg);
               })
@@ -152,6 +180,7 @@ process.on('SIGINT', () => {
   console.log('\n[Service B] Received SIGINT, shutting down gracefully...');
   riskClient.close();
   redis.disconnect();
+  void timescaleRepo.disconnect();
   process.exit(0);
 });
 
@@ -159,6 +188,7 @@ process.on('SIGTERM', () => {
   console.log('\n[Service B] Received SIGTERM, shutting down gracefully...');
   riskClient.close();
   redis.disconnect();
+  void timescaleRepo.disconnect();
   process.exit(0);
 });
 
