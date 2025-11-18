@@ -38,7 +38,14 @@ This project demonstrates enterprise-level patterns for building scalable, low-l
 ┌─────────────────┐       ┌─────────────────┐
 │   Service B     │◄─────►│     Redis       │  In-Memory Cache
 │  (Consumer x5)  │       │   (Cache/Store) │  Price caching + Trade history
-└─────────────────┘       └─────────────────┘
+└────────┬────────┘       └─────────────────┘
+         │
+         │ gRPC Risk Check
+         ▼
+┌─────────────────┐
+│   Service C     │  Risk Checker
+│ (gRPC Server)   │  Real-time risk validation
+└─────────────────┘
 ```
 
 ### Current Components
@@ -49,6 +56,7 @@ This project demonstrates enterprise-level patterns for building scalable, low-l
 | **RabbitMQ** | Message Queue | RabbitMQ 3.13 | Clusterable |
 | **Redis** | Cache & Data Store | Redis 7 Alpine | Single instance (clusterable) |
 | **Service B** | Execution Engine | TypeScript + Node.js + ioredis | **Horizontally scalable** |
+| **Service C** | Risk Checker | Go + gRPC | Single instance (horizontally scalable) |
 
 ## 🚀 Key Features
 
@@ -60,6 +68,8 @@ This project demonstrates enterprise-level patterns for building scalable, low-l
 - **Trade History**: Last 100 trades stored in Redis lists
 - **Horizontal Scaling**: Scale consumers from 1 to N instances
 - **Load Balancing**: Automatic round-robin distribution
+- **gRPC Risk Service**: Real-time trade risk validation before execution
+- **Multi-language Services**: TypeScript (Services A & B) + Go (Service C)
 - **Containerization**: Multi-stage Docker builds for optimal image size
 - **Docker Compose**: One-command orchestration
 - **Message Acknowledgment**: At-least-once delivery guarantee
@@ -80,10 +90,12 @@ This project demonstrates enterprise-level patterns for building scalable, low-l
   - ✅ GitHub Actions CI/CD pipeline
   - [ ] Git hooks with Husky
 
-- [ ] **gRPC Service**: Low-latency synchronous communication
-  - Portfolio management service
-  - Protobuf definitions
-  - Bi-directional streaming
+- [x] **gRPC Service**: Low-latency synchronous communication
+  - ✅ Risk Checker service (Go) with gRPC
+  - ✅ Protobuf definitions (risk.proto)
+  - ✅ gRPC client integration in Service B
+  - [ ] Bi-directional streaming for real-time updates
+  - [ ] Portfolio management service
 
 - [ ] **API Gateway**: Kong or custom gateway
   - Rate limiting
@@ -101,12 +113,15 @@ This project demonstrates enterprise-level patterns for building scalable, low-l
 
 ## 🛠️ Tech Stack
 
-- **Language**: TypeScript 5.4
+- **Languages**:
+  - TypeScript 5.4 (Services A & B)
+  - Go 1.21+ (Service C)
 - **Runtime**: Node.js 18 (Alpine)
 - **Message Broker**: RabbitMQ 3.13 with Management UI
 - **Cache & Storage**: Redis 7 (Alpine) with AOF persistence
+- **RPC Framework**: gRPC with Protocol Buffers
 - **Containerization**: Docker + Docker Compose
-- **Architecture**: Microservices, Event-driven
+- **Architecture**: Microservices, Event-driven, Polyglot
 
 ## 📦 Quick Start
 
@@ -140,15 +155,20 @@ docker run -d --name rabbitmq-dev -p 5672:5672 -p 15672:15672 rabbitmq:3-managem
 # Terminal 2: Start Redis
 docker run -d --name redis-dev -p 6379:6379 redis:7-alpine
 
-# Terminal 3: Service A
+# Terminal 3: Service C (Risk Checker)
+cd service-c
+docker build -t service-c:dev .
+docker run -d --name service-c-dev -p 50051:50051 service-c:dev
+
+# Terminal 4: Service A
 cd service-a
 npm install
 npm start
 
-# Terminal 4: Service B
+# Terminal 5: Service B
 cd service-b
 npm install
-npm start
+RISK_SERVICE_URL=localhost:50051 npm start
 ```
 
 ## 📊 Monitoring
@@ -169,6 +189,52 @@ npm start
   GET trade_count:BATTERY_GRID_01     # View trade count
   TTL price:BATTERY_GRID_01           # Check cache TTL
   ```
+
+## 🛡️ Risk Service (Service C)
+
+The Risk Checker service validates trades before execution using gRPC:
+
+### How It Works
+1. **Service B** receives a trade signal from RabbitMQ
+2. **Before processing**, Service B calls Service C via gRPC with trade details
+3. **Service C** validates the trade against risk rules (volume limits, position limits, etc.)
+4. **Returns response**:
+   - `allowed: true` → Trade proceeds to execution
+   - `allowed: false` → Trade is rejected (logged but not stored in Redis)
+5. If Service C is unavailable, Service B logs an error and skips the trade
+
+### gRPC API
+
+**Protobuf Definition** (`protos/risk.proto`):
+```protobuf
+service RiskChecker {
+  rpc CheckTradeRisk (TradeRiskRequest) returns (TradeRiskResponse) {}
+}
+
+message TradeRiskRequest {
+  string assetId = 1;
+  double volume = 2;
+  string action = 3;
+  string timestamp = 4;
+}
+
+message TradeRiskResponse {
+  bool allowed = 1;
+  string reason = 2;
+  string checkId = 3;
+}
+```
+
+### Risk Rules (Service C Logic)
+- Volume limit: Max 100 MWh per trade
+- Action validation: Only BUY/SELL allowed
+- Asset ID validation: Must match pattern
+
+### Benefits
+- **Pre-execution validation**: Prevent bad trades before they execute
+- **Centralized risk logic**: Single source of truth for risk rules
+- **Low latency**: gRPC provides <10ms response times
+- **Graceful degradation**: Service B continues if Service C is down (conservative approach)
 
 ## 🎓 Learning Outcomes
 
@@ -218,6 +284,13 @@ RABBITMQ_URL=amqp://localhost  # Local development
 REDIS_URL=redis://redis:6379  # Docker network
 # or
 REDIS_URL=redis://localhost:6379  # Local development
+
+RISK_SERVICE_URL=service-c:50051  # Docker network
+# or
+RISK_SERVICE_URL=localhost:50051  # Local development
+
+# Service C only
+GRPC_PORT=50051  # gRPC server port
 ```
 
 ## 📝 Project Structure
@@ -227,16 +300,31 @@ REDIS_URL=redis://localhost:6379  # Local development
 ├── service-a/              # Signal Generator (Producer)
 │   ├── src/
 │   │   └── index.ts        # Main application
+│   ├── tests/              # Unit & integration tests
 │   ├── package.json
 │   └── tsconfig.json
 ├── service-b/              # Execution Engine (Consumer)
 │   ├── src/
-│   │   └── index.ts        # Main application
+│   │   ├── index.ts        # Main application
+│   │   ├── grpc-client.ts  # gRPC Risk Service client
+│   │   └── trading.ts      # Trading logic
+│   ├── tests/              # Unit & integration tests
 │   ├── package.json
 │   └── tsconfig.json
+├── service-c/              # Risk Checker (gRPC Server)
+│   ├── cmd/server/
+│   │   └── main.go         # Main application
+│   ├── internal/server/
+│   │   └── risk_server.go  # gRPC service implementation
+│   ├── pkg/riskpb/         # Generated protobuf code
+│   ├── Dockerfile          # Go multi-stage build
+│   └── go.mod
+├── protos/
+│   └── risk.proto          # gRPC service definition
 ├── Dockerfile.node         # Shared multi-stage Docker build
 ├── docker-compose.yml      # Service orchestration
-└── README.md
+├── README.md
+└── CLAUDE.md               # Development guidelines
 ```
 
 ## 🔀 Development Workflow

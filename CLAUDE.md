@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A microservices-based trading platform demonstrating event-driven architecture with RabbitMQ message queuing. The system simulates high-frequency trading signals with horizontally scalable consumers.
+A microservices-based trading platform demonstrating event-driven architecture with RabbitMQ message queuing and gRPC-based risk validation. The system simulates high-frequency trading signals with horizontally scalable consumers and real-time risk checking.
 
-**Core Pattern**: Service A (producer) generates trading signals every 3 seconds → RabbitMQ (message broker) → Service B (consumer, horizontally scalable) processes signals with at-least-once delivery guarantee.
+**Core Pattern**: Service A (producer) generates trading signals every 3 seconds → RabbitMQ (message broker) → Service B (consumer, horizontally scalable) validates trades with Service C (gRPC risk checker) → processes approved signals with at-least-once delivery guarantee.
 
 ## Architecture
 
@@ -18,10 +18,18 @@ A microservices-based trading platform demonstrating event-driven architecture w
 
 - **Service B** (`service-b/`): Trade execution engine/consumer that processes signals
   - Consumes from `trading_signals` queue
+  - **Validates trades with Service C via gRPC before execution**
   - Integrates Redis for caching asset prices and storing trade history
   - Simulates 50ms processing time per message
   - Horizontally scalable (can run multiple instances with round-robin load balancing)
   - Uses manual message acknowledgment (ack/nack) for reliability
+
+- **Service C** (`service-c/`): Risk checker service (gRPC server) written in Go
+  - Validates trades against risk rules (volume limits, position limits, etc.)
+  - Exposes gRPC API on port 50051
+  - Returns `TradeRiskResponse` with `allowed` flag and rejection reason
+  - Horizontally scalable (stateless design)
+  - Low-latency (<10ms response time)
 
 - **RabbitMQ**: Message broker providing asynchronous communication
   - Queue name: `trading_signals`
@@ -40,11 +48,19 @@ A microservices-based trading platform demonstrating event-driven architecture w
 3. RabbitMQ distributes messages round-robin across Service B instances
 4. Service B instances:
    - Consume messages from RabbitMQ
+   - **Call Service C via gRPC to validate trade risk**
+     - If `allowed: false` → Log rejection reason, acknowledge message, skip trade
+     - If `allowed: true` → Proceed with execution
+     - If Service C unavailable → Log error, acknowledge message, skip trade (fail-safe)
    - Check Redis cache for asset price (cache hit) or generate new price (cache miss)
    - Calculate trade value using cached price
    - Store trade record in Redis (`trade_history` list)
    - Increment trade counter in Redis
    - Acknowledge message to RabbitMQ on success or reject (nack) on failure
+5. Service C (when called):
+   - Receives `TradeRiskRequest` via gRPC
+   - Validates trade against risk rules (volume < 100 MWh, valid action, etc.)
+   - Returns `TradeRiskResponse` with `allowed` boolean and reason string
 
 ### Shared Type Definition
 Both services duplicate the `TradeSignal` type definition:
@@ -62,7 +78,7 @@ Note: In production, this would be in a shared types package.
 
 ### Docker Compose (Production-like)
 ```bash
-# Start all services (RabbitMQ + Redis + Service A + Service B)
+# Start all services (RabbitMQ + Redis + Service A + Service B + Service C)
 docker compose up --build -d
 
 # Scale Service B to 5 instances for horizontal scaling demo
@@ -74,6 +90,7 @@ docker compose logs -f
 # View logs for specific service
 docker compose logs -f service-a
 docker compose logs -f service-b
+docker compose logs -f service-c
 docker compose logs -f redis
 
 # Stop all services
@@ -88,6 +105,11 @@ docker run -d --name rabbitmq-dev -p 5672:5672 -p 15672:15672 rabbitmq:3-managem
 # Start Redis locally
 docker run -d --name redis-dev -p 6379:6379 redis:7-alpine
 
+# Start Service C (Risk Checker) locally
+cd service-c
+docker build -t service-c:dev .
+docker run -d --name service-c-dev -p 50051:50051 service-c:dev
+
 # Service A
 cd service-a
 npm install
@@ -97,7 +119,7 @@ npm run build    # Compile TypeScript to dist/
 # Service B
 cd service-b
 npm install
-npm start        # Run with ts-node
+RISK_SERVICE_URL=localhost:50051 npm start  # Run with ts-node
 npm run build    # Compile TypeScript to dist/
 ```
 
@@ -130,6 +152,15 @@ npm run build    # Compile TypeScript to dist/
 - `REDIS_URL`: Redis connection string (Service B only)
   - Docker: `redis://redis:6379` (uses Docker network service name)
   - Local: `redis://localhost:6379` (default)
+  - Set in `docker-compose.yml` for containerized services
+
+- `RISK_SERVICE_URL`: gRPC Risk Service connection string (Service B only)
+  - Docker: `service-c:50051` (uses Docker network service name)
+  - Local: `localhost:50051` (default)
+  - Set in `docker-compose.yml` for containerized services
+
+- `GRPC_PORT`: gRPC server port (Service C only)
+  - Default: `50051`
   - Set in `docker-compose.yml` for containerized services
 
 ## Build System
@@ -169,9 +200,64 @@ Service B uses manual acknowledgment for reliability:
 - Service B: Horizontally scalable (use `--scale` flag)
   - All instances share same Redis cache
   - Price cache reduces redundant calculations across instances
+  - All instances call same Service C for risk checks
+- Service C: Horizontally scalable (stateless gRPC server)
+  - Can run multiple instances behind a load balancer
+  - No shared state, pure validation logic
 - RabbitMQ: Single instance (can be clustered in production)
 - Redis: Single instance (can use Redis Cluster/Sentinel for HA)
 - Load balancing: Automatic round-robin by RabbitMQ
+
+## gRPC Risk Service Integration
+
+### Overview
+Service C is a Go-based gRPC server that validates trades before execution. Service B calls it synchronously before processing each trade.
+
+### Architecture
+```
+Service B (TypeScript)  →  gRPC Client  →  Service C (Go)
+                                              gRPC Server
+```
+
+### Implementation Details
+
+**Service C (Go):**
+- Location: `service-c/`
+- Framework: gRPC with Protocol Buffers
+- Port: 50051
+- Protobuf definition: `protos/risk.proto`
+- Generated code: `service-c/pkg/riskpb/`
+- Implementation: `service-c/internal/server/risk_server.go`
+
+**Service B (TypeScript):**
+- gRPC Client wrapper: `service-b/src/grpc-client.ts`
+- Integration point: `service-b/src/index.ts` in `processTrade()` function
+- Dependencies: `@grpc/grpc-js`, `@grpc/proto-loader`
+
+### Trade Validation Flow
+1. Service B receives trade signal from RabbitMQ
+2. Service B calls `RiskClient.checkRisk()` with trade details
+3. Service C validates trade (volume < 100 MWh, valid action, etc.)
+4. Service C returns `TradeRiskResponse`:
+   - `allowed: true` → Service B proceeds with execution
+   - `allowed: false` → Service B logs rejection and skips trade
+5. If gRPC call fails (Service C down):
+   - Service B logs error
+   - Service B skips trade (fail-safe behavior)
+   - Message is acknowledged to prevent requeue
+
+### Error Handling
+The RiskClient implements comprehensive error handling:
+- **UNAVAILABLE**: Service C is down or unreachable
+- **DEADLINE_EXCEEDED**: Request timeout (5 second deadline)
+- **Other errors**: Generic gRPC errors with error codes
+
+All errors result in trade rejection to maintain system safety.
+
+### Testing
+- Unit tests: Mock RiskClient responses in `service-b/tests/integration/risk-integration.test.ts`
+- Integration tests: Use Vitest mocks to simulate allowed/rejected/error scenarios
+- No live gRPC server needed for CI (mocked)
 
 ## Git Workflow & Branching Model
 
@@ -399,6 +485,7 @@ Per README, planned integrations include:
 - ✅ Unit and integration tests with Vitest and testcontainers (COMPLETED)
 - ✅ ESLint and Prettier configuration (COMPLETED)
 - ✅ GitHub Actions CI/CD pipeline (COMPLETED)
+- ✅ gRPC Risk Service (Service C) in Go with client integration in Service B (COMPLETED)
 - Git hooks with Husky for pre-commit checks (PLANNED)
 - gRPC service for portfolio management (PLANNED)
 - API Gateway (Kong) with rate limiting (PLANNED)
