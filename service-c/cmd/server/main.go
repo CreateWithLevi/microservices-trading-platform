@@ -33,8 +33,8 @@ func main() {
 
 	// Create gRPC server with options
 	grpcServer := grpc.NewServer(
-		grpc.MaxRecvMsgSize(4 * 1024 * 1024), // 4MB max message size
-		grpc.MaxSendMsgSize(4 * 1024 * 1024),
+		grpc.MaxRecvMsgSize(4*1024*1024), // 4MB max message size
+		grpc.MaxSendMsgSize(4*1024*1024),
 	)
 
 	// Register our Risk Checker service
