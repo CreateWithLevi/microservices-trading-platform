@@ -76,9 +76,92 @@ services:
       - GRPC_PORT=50051
       - SENTRY_DSN=${SENTRY_DSN_SERVICE_C:-}
 
+  # ----------------------------------------------------
+
+  # Monitoring: Prometheus
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    networks:
+      - trading_network
+    depends_on:
+      - service-b
+      - service-c
+
+  # ----------------------------------------------------
+
+  # Monitoring: Grafana
+  grafana:
+    image: grafana/grafana:10.2.2
+    container_name: grafana
+    ports:
+      - "3001:3000"  # Map to 3001 to avoid conflict with default Node.js ports
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning
+      - ./infra/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - grafana_data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:3001
+    networks:
+      - trading_network
+    depends_on:
+      - prometheus
+
+  # ----------------------------------------------------
+
+  # Monitoring: RabbitMQ Exporter
+  rabbitmq-exporter:
+    image: kbudde/rabbitmq-exporter:v1.0.0-RC19
+    container_name: rabbitmq-exporter
+    ports:
+      - "9419:9419"
+    environment:
+      - RABBIT_URL=http://rabbitmq:15672
+      - RABBIT_USER=guest
+      - RABBIT_PASSWORD=guest
+      - PUBLISH_PORT=9419
+    networks:
+      - trading_network
+    depends_on:
+      - rabbitmq
+
+  # ----------------------------------------------------
+
+  # Monitoring: Redis Exporter
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.55.0-alpine
+    container_name: redis-exporter
+    ports:
+      - "9121:9121"
+    environment:
+      - REDIS_ADDR=redis://redis:6379
+    networks:
+      - trading_network
+    depends_on:
+      - redis
+
 # ------------------------------------------------------
 
 # Virtual network for Docker services to communicate
 networks:
   trading_network:
     driver: bridge
+
+# Persistent volumes for monitoring data
+volumes:
+  prometheus_data:
+  grafana_data:
