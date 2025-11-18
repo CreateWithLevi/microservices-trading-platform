@@ -1,8 +1,8 @@
 import amqp from 'amqplib';
+import type { Channel } from 'amqplib';
 import Redis from 'ioredis';
 import { getAssetPrice, storeTradeHistory, type TradeSignal } from './trading';
 import { RiskClient } from './grpc-client';
-import { WebSocketServer } from './websocket-server';
 import { randomUUID } from 'crypto';
 
 // --- Configuration ---
@@ -11,6 +11,7 @@ const RABBITMQ_URL = process.env.RABBITMQ_URL || 'amqp://localhost'; // RabbitMQ
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379'; // Redis server URL
 const RISK_SERVICE_URL = process.env.RISK_SERVICE_URL || 'service-c:50051'; // gRPC Risk Service URL
 const QUEUE_NAME = 'trading_signals';
+const EXCHANGE_NAME = 'trading_events'; // Exchange for publishing trade notifications
 
 // --- Redis Client ---
 const redis = new Redis(REDIS_URL, {
@@ -31,13 +32,44 @@ redis.on('error', (err: Error) => {
 // --- Risk Service Client ---
 const riskClient = new RiskClient(RISK_SERVICE_URL);
 
-// --- WebSocket Server ---
-const wsServer = new WebSocketServer();
+// --- Trade Notification Type ---
+type TradeNotification = {
+  id: string;
+  assetId: string;
+  action: string;
+  volume: number;
+  price: number;
+  totalValue: number;
+  timestamp: string;
+  status: 'approved' | 'rejected';
+  rejectionReason?: string;
+  checkId?: string;
+};
+
+/**
+ * Publish trade notification to RabbitMQ exchange for Service N to broadcast
+ */
+function publishTradeNotification(channel: Channel, trade: TradeNotification): void {
+  try {
+    const message = JSON.stringify(trade);
+    const success = channel.publish(EXCHANGE_NAME, '', Buffer.from(message));
+
+    if (success) {
+      console.log(
+        `[Service B] Published trade notification: ${trade.assetId} (${trade.status})`
+      );
+    } else {
+      console.warn('[Service B] Failed to publish trade notification (channel buffer full)');
+    }
+  } catch (error) {
+    console.error('[Service B] Error publishing trade notification:', error);
+  }
+}
 
 /**
  * Process trade with Risk Service validation and Redis integration
  */
-async function processTrade(signal: TradeSignal): Promise<void> {
+async function processTrade(signal: TradeSignal, channel: Channel): Promise<void> {
   console.log(
     `[Service B] Processing signal: ${signal.action} ${signal.volume} MWh for ${signal.assetId}`
   );
@@ -71,8 +103,8 @@ async function processTrade(signal: TradeSignal): Promise<void> {
       status = 'rejected';
       rejectionReason = riskCheck.reason;
 
-      // Emit rejected trade event via WebSocket
-      wsServer.emitTradeProcessed({
+      // Publish rejected trade notification to RabbitMQ
+      publishTradeNotification(channel, {
         id: tradeId,
         assetId: signal.assetId,
         action: signal.action,
@@ -97,8 +129,8 @@ async function processTrade(signal: TradeSignal): Promise<void> {
     console.log(`[Service B] Trade skipped due to Risk Service error.`);
     rejectionReason = `Risk Service error: ${errorMessage}`;
 
-    // Emit error trade event via WebSocket
-    wsServer.emitTradeProcessed({
+    // Publish error trade notification to RabbitMQ
+    publishTradeNotification(channel, {
       id: tradeId,
       assetId: signal.assetId,
       action: signal.action,
@@ -129,8 +161,8 @@ async function processTrade(signal: TradeSignal): Promise<void> {
 
   console.log(`[Service B] ...Processing complete. Trade saved to database and Redis.`);
 
-  // Step 4: Emit approved trade event via WebSocket
-  wsServer.emitTradeProcessed({
+  // Step 4: Publish approved trade notification to RabbitMQ
+  publishTradeNotification(channel, {
     id: tradeId,
     assetId: signal.assetId,
     action: signal.action,
@@ -148,17 +180,17 @@ async function processTrade(signal: TradeSignal): Promise<void> {
  */
 async function startConsumer(): Promise<void> {
   try {
-    // 1. Start WebSocket server
-    console.log('[Service B] Starting WebSocket server...');
-    wsServer.start();
-
-    // 2. Connect to Risk Service (gRPC)
+    // 1. Connect to Risk Service (gRPC)
     console.log('[Service B] Connecting to Risk Service...');
     riskClient.connect();
 
-    // 3. Connect to RabbitMQ server
+    // 2. Connect to RabbitMQ server
     const connection = await amqp.connect(RABBITMQ_URL);
     const channel = await connection.createChannel();
+
+    // 3. Assert the exchange for publishing trade notifications
+    await channel.assertExchange(EXCHANGE_NAME, 'fanout', { durable: false });
+    console.log(`[Service B] Exchange '${EXCHANGE_NAME}' asserted`);
 
     // 4. Assert the queue (ensure it exists)
     await channel.assertQueue(QUEUE_NAME, { durable: false });
@@ -177,7 +209,7 @@ async function startConsumer(): Promise<void> {
             const signal = JSON.parse(content) as TradeSignal;
 
             // Process our business logic
-            void processTrade(signal)
+            void processTrade(signal, channel)
               .then(() => {
                 // 6. (IMPORTANT) Acknowledge the message (Ack)
                 // Tell RabbitMQ we've successfully processed this message, it can be deleted
@@ -214,7 +246,6 @@ async function startConsumer(): Promise<void> {
 // Graceful shutdown handlers
 process.on('SIGINT', () => {
   console.log('\n[Service B] Received SIGINT, shutting down gracefully...');
-  wsServer.close();
   riskClient.close();
   redis.disconnect();
   process.exit(0);
@@ -222,7 +253,6 @@ process.on('SIGINT', () => {
 
 process.on('SIGTERM', () => {
   console.log('\n[Service B] Received SIGTERM, shutting down gracefully...');
-  wsServer.close();
   riskClient.close();
   redis.disconnect();
   process.exit(0);

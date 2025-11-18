@@ -19,7 +19,7 @@ A microservices-based trading platform demonstrating event-driven architecture w
 - **Service B** (`service-b/`): Trade execution engine/consumer that processes signals
   - Consumes from `trading_signals` queue
   - **Validates trades with Service C via gRPC before execution**
-  - **Broadcasts trade events via WebSocket server (Socket.io) on port 3001**
+  - **Publishes trade notifications to `trading_events` exchange**
   - Integrates Redis for caching asset prices and storing trade history
   - Simulates 50ms processing time per message
   - Horizontally scalable (can run multiple instances with round-robin load balancing)
@@ -32,9 +32,17 @@ A microservices-based trading platform demonstrating event-driven architecture w
   - Horizontally scalable (stateless design)
   - Low-latency (<10ms response time)
 
+- **Service N** (`service-n/`): Notification service for real-time WebSocket broadcasting
+  - Consumes trade notifications from `trading_events` exchange
+  - Broadcasts `trade.update` events via Socket.io on port 3002
+  - Stateless design (no local state)
+  - Horizontally scalable with Redis Pub/Sub adapter
+  - Decouples WebSocket communication from trade processing worker
+
 - **RabbitMQ**: Message broker providing asynchronous communication
-  - Queue name: `trading_signals`
-  - Non-durable queue (doesn't persist across restarts)
+  - Queues: `trading_signals`, `trade_notifications`
+  - Exchange: `trading_events` (fanout type)
+  - Non-durable configuration
   - Enables horizontal scaling via round-robin distribution
 
 - **Redis**: In-memory data store for caching and fast data access
@@ -47,7 +55,8 @@ A microservices-based trading platform demonstrating event-driven architecture w
   - Displays live trade execution data via WebSocket connection
   - Built with Next.js App Router, TypeScript, and Tailwind CSS
   - Uses Zustand for state management
-  - Socket.io client connects to Service B's WebSocket server
+  - Socket.io client connects to Service N's WebSocket server
+  - Listens for `trade.update` events
   - Real-time updates for approved and rejected trades
   - Runs on port 3000
 
@@ -58,22 +67,26 @@ A microservices-based trading platform demonstrating event-driven architecture w
 4. Service B instances:
    - Consume messages from RabbitMQ
    - **Call Service C via gRPC to validate trade risk**
-     - If `allowed: false` → Log rejection reason, broadcast rejection via WebSocket, acknowledge message, skip trade
+     - If `allowed: false` → Log rejection reason, publish rejection notification, acknowledge message, skip trade
      - If `allowed: true` → Proceed with execution
-     - If Service C unavailable → Log error, broadcast error via WebSocket, acknowledge message, skip trade (fail-safe)
+     - If Service C unavailable → Log error, publish error notification, acknowledge message, skip trade (fail-safe)
    - Check Redis cache for asset price (cache hit) or generate new price (cache miss)
    - Calculate trade value using cached price
    - Store trade record in Redis (`trade_history` list)
    - Increment trade counter in Redis
-   - **Broadcast trade result via WebSocket to all connected clients**
+   - **Publish trade notification to `trading_events` exchange**
    - Acknowledge message to RabbitMQ on success or reject (nack) on failure
 5. Service C (when called):
    - Receives `TradeRiskRequest` via gRPC
    - Validates trade against risk rules (volume < 100 MWh, valid action, etc.)
    - Returns `TradeRiskResponse` with `allowed` boolean and reason string
-6. Frontend Dashboard:
-   - Connects to Service B's WebSocket server via Socket.io client
-   - Listens for `trade:processed` events
+6. Service N (Notification Service):
+   - Consumes trade notifications from `trade_notifications` queue
+   - Broadcasts `trade.update` event via WebSocket to all connected clients
+   - Acknowledges RabbitMQ messages after broadcasting
+7. Frontend Dashboard:
+   - Connects to Service N's WebSocket server via Socket.io client
+   - Listens for `trade.update` events
    - Updates Zustand store with new trade data
    - Renders real-time trade list with approval/rejection status
 
@@ -497,16 +510,17 @@ The project includes a comprehensive CI/CD pipeline (`.github/workflows/ci.yml`)
 ## Real-time WebSockets & Frontend Dashboard
 
 ### Overview
-The platform includes a real-time dashboard built with Next.js 14+ that displays live trade execution data via WebSocket connections. Service B acts as a Backend-for-Frontend (BFF) by running a Socket.io server alongside its RabbitMQ consumer.
+The platform includes a real-time dashboard built with Next.js 14+ that displays live trade execution data via WebSocket connections. **Service N** is a dedicated notification service that decouples WebSocket communication from the trade processing worker (Service B), enabling independent scaling and better separation of concerns.
 
 ### Architecture
 
-**WebSocket Server (Service B):**
-- Location: `service-b/src/websocket-server.ts`
+**WebSocket Server (Service N):**
+- Location: `service-n/src/websocket-server.ts`
 - Framework: Socket.io
-- Port: 3001
+- Port: 3002
 - CORS: Configured to allow connections from frontend (port 3000)
-- Events emitted: `trade:processed`
+- Events emitted: `trade.update`
+- Message source: RabbitMQ `trading_events` exchange
 
 **Frontend (Next.js):**
 - Location: `frontend/`
@@ -518,14 +532,10 @@ The platform includes a real-time dashboard built with Next.js 14+ that displays
 
 ### Implementation Details
 
-**Service B WebSocket Integration:**
+**Service B → RabbitMQ Publishing:**
 ```typescript
-// WebSocket server initialization
-const wsServer = new WebSocketServer();
-wsServer.start(); // Runs on port 3001
-
-// Emit trade events after processing
-wsServer.emitTradeProcessed({
+// Service B publishes trade notifications to RabbitMQ exchange
+publishTradeNotification(channel, {
   id: string,           // Unique trade ID
   assetId: string,      // Asset identifier
   action: 'BUY' | 'SELL',
@@ -537,6 +547,14 @@ wsServer.emitTradeProcessed({
   rejectionReason?: string,  // Present if rejected
   checkId?: string,     // Risk check ID from Service C
 });
+// Published to trading_events exchange (fanout)
+```
+
+**Service N → WebSocket Broadcasting:**
+```typescript
+// Service N consumes from RabbitMQ and broadcasts via WebSocket
+wsServer.broadcastTradeUpdate(trade); // Emits 'trade.update' event
+// All connected clients receive the update
 ```
 
 **Frontend State Management (Zustand):**
@@ -555,6 +573,8 @@ const useTradeStore = create<TradeStore>((set) => ({
 **Frontend WebSocket Client:**
 ```typescript
 // components/RealTimeTrades.tsx
+const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3002';
+
 const socket = io(SOCKET_URL, {
   reconnectionDelay: 1000,
   reconnection: true,
@@ -562,7 +582,7 @@ const socket = io(SOCKET_URL, {
   transports: ['websocket'],
 });
 
-socket.on('trade:processed', (trade: TradeResult) => {
+socket.on('trade.update', (trade: TradeResult) => {
   addTrade(trade); // Update Zustand store
 });
 ```
@@ -571,7 +591,7 @@ socket.on('trade:processed', (trade: TradeResult) => {
 
 **Development Mode:**
 ```bash
-# Start frontend locally (requires Service B running on port 3001)
+# Start frontend locally (requires Service N running on port 3002)
 cd frontend
 npm install
 npm run dev
@@ -585,13 +605,14 @@ npm run dev
 docker compose up --build
 
 # Access dashboard at http://localhost:3000
-# WebSocket connects to Service B at http://localhost:3001
+# WebSocket connects to Service N at http://localhost:3002
 ```
 
 **Environment Variables:**
-- `NEXT_PUBLIC_SOCKET_URL`: WebSocket server URL (default: `http://localhost:3001`)
-- `WS_PORT`: WebSocket server port in Service B (default: `3001`)
+- `NEXT_PUBLIC_SOCKET_URL`: WebSocket server URL (default: `http://localhost:3002`)
+- `WS_PORT`: WebSocket server port in Service N (default: `3002`)
 - `CORS_ORIGIN`: Allowed CORS origin for WebSocket (default: `http://localhost:3000`)
+- `RABBITMQ_URL`: RabbitMQ connection string for Service N
 
 ### Dashboard Features
 
@@ -626,22 +647,21 @@ Tests include:
 
 ### WebSocket Event Flow
 
-1. **Service B starts**: WebSocket server listens on port 3001
-2. **Frontend loads**: Socket.io client connects to Service B
-3. **Connection established**: Frontend updates connection status to "connected"
-4. **Trade processed**: Service B emits `trade:processed` event with trade data
-5. **Frontend receives**: Socket.io client triggers callback with trade data
-6. **Store updated**: Zustand store adds trade to state
-7. **UI re-renders**: React component displays updated trade list
+1. **Service B processes trade**: Publishes trade notification to `trading_events` exchange
+2. **Service N consumes**: Receives notification from `trade_notifications` queue
+3. **Service N broadcasts**: Emits `trade.update` event via WebSocket to all clients
+4. **Frontend receives**: Socket.io client triggers callback with trade data
+5. **Store updated**: Zustand store adds trade to state
+6. **UI re-renders**: React component displays updated trade list
 
 ### Production Considerations
 
 **Scalability:**
-- Currently, Service B runs a single WebSocket server instance
-- For horizontal scaling, consider:
-  - Redis Pub/Sub adapter for Socket.io to share events across instances
-  - Sticky sessions for WebSocket connections
-  - Dedicated real-time service separate from Service B
+- **Service N is designed for horizontal scaling**
+- For multiple instances, use **Redis Pub/Sub adapter** with Socket.io
+- This enables event sharing across all Service N instances
+- Frontend clients can connect to any Service N instance
+- No sticky sessions required with Redis adapter
 
 **Security:**
 - CORS configured to allow specific frontend origin

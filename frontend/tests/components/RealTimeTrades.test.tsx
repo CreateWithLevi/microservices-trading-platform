@@ -67,16 +67,16 @@ describe('RealTimeTrades Component', () => {
     expect(mockSocketInstance.on).toHaveBeenCalledWith('connect', expect.any(Function));
     expect(mockSocketInstance.on).toHaveBeenCalledWith('disconnect', expect.any(Function));
     expect(mockSocketInstance.on).toHaveBeenCalledWith('connect_error', expect.any(Function));
-    expect(mockSocketInstance.on).toHaveBeenCalledWith('trade:processed', expect.any(Function));
+    expect(mockSocketInstance.on).toHaveBeenCalledWith('trade.update', expect.any(Function));
   });
 
   it('should update store when trade event is received', async () => {
-    // Setup mock to capture the trade:processed callback
-    let tradeProcessedCallback: ((trade: TradeResult) => void) | null = null;
+    // Setup mock to capture the trade.update callback
+    let tradeUpdateCallback: ((trade: TradeResult) => void) | null = null;
 
     mockSocketInstance.on.mockImplementation((event: string, callback: (data?: unknown) => void) => {
-      if (event === 'trade:processed') {
-        tradeProcessedCallback = callback as (trade: TradeResult) => void;
+      if (event === 'trade.update') {
+        tradeUpdateCallback = callback as (trade: TradeResult) => void;
       } else if (event === 'connect') {
         setTimeout(() => callback(), 0);
       }
@@ -86,7 +86,7 @@ describe('RealTimeTrades Component', () => {
 
     // Wait for component to mount and register listeners
     await waitFor(() => {
-      expect(tradeProcessedCallback).not.toBeNull();
+      expect(tradeUpdateCallback).not.toBeNull();
     });
 
     // Simulate receiving a trade event
@@ -102,7 +102,7 @@ describe('RealTimeTrades Component', () => {
       checkId: 'check-456',
     };
 
-    tradeProcessedCallback!(mockTrade);
+    tradeUpdateCallback!(mockTrade);
 
     // Verify trade was added to store
     await waitFor(() => {
