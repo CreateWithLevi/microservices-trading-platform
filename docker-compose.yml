@@ -70,11 +70,13 @@ services:
     container_name: service-c
     ports:
       - "50051:50051"                # Expose gRPC port
+      - "8080:8080"                  # Expose metrics HTTP port
     networks:
       - trading_network
     environment:
       - GRPC_PORT=50051
       - SENTRY_DSN=${SENTRY_DSN_SERVICE_C:-}
+      - METRICS_PORT=8080
 
   # ----------------------------------------------------
 

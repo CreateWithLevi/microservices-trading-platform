@@ -28,7 +28,7 @@ scrape_configs:
   # Service C (Go Risk Checker gRPC Service)
   - job_name: 'service-c'
     static_configs:
-      - targets: ['service-c:50051']
+      - targets: ['service-c:8080']
         labels:
           service: 'service-c'
           type: 'risk-checker'

@@ -6,6 +6,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/createwithlevi/trading-platform/service-c/internal/metrics"
 	"github.com/createwithlevi/trading-platform/service-c/pkg/riskpb"
 	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
@@ -24,6 +25,9 @@ func NewRiskServer() *RiskServer {
 // CheckTradeRisk implements the gRPC method for risk checking
 // Business Logic: If volume > 90, reject the trade; otherwise, allow it
 func (s *RiskServer) CheckTradeRisk(ctx context.Context, req *riskpb.TradeRiskRequest) (*riskpb.TradeRiskResponse, error) {
+	// Start timer for duration metric
+	startTime := time.Now()
+
 	// Generate a unique check ID for this risk assessment
 	checkID := uuid.New().String()
 
@@ -37,6 +41,9 @@ func (s *RiskServer) CheckTradeRisk(ctx context.Context, req *riskpb.TradeRiskRe
 	// Log the incoming request
 	log.Printf("[RiskCheck %s] Checking trade: Asset=%s, Action=%s, Volume=%.2f, Timestamp=%s",
 		checkID, req.AssetId, req.Action, req.Volume, req.Timestamp)
+
+	// Track volume distribution
+	metrics.RiskCheckVolumeHistogram.Observe(req.Volume)
 
 	// Deterministic risk check: volume > 90 is considered high risk
 	if req.Volume > 90 {
@@ -60,6 +67,11 @@ func (s *RiskServer) CheckTradeRisk(ctx context.Context, req *riskpb.TradeRiskRe
 				hub.CaptureMessage(reason)
 			})
 		}
+
+		// Record metrics for rejected trade
+		duration := time.Since(startTime).Seconds()
+		metrics.RiskChecksTotal.WithLabelValues("rejected", req.AssetId).Inc()
+		metrics.RiskCheckDurationSeconds.WithLabelValues("rejected", req.AssetId).Observe(duration)
 
 		return &riskpb.TradeRiskResponse{
 			Allowed: false,
@@ -88,6 +100,11 @@ func (s *RiskServer) CheckTradeRisk(ctx context.Context, req *riskpb.TradeRiskRe
 			hub.CaptureMessage(reason)
 		})
 	}
+
+	// Record metrics for approved trade
+	duration := time.Since(startTime).Seconds()
+	metrics.RiskChecksTotal.WithLabelValues("allowed", req.AssetId).Inc()
+	metrics.RiskCheckDurationSeconds.WithLabelValues("allowed", req.AssetId).Observe(duration)
 
 	return &riskpb.TradeRiskResponse{
 		Allowed: true,
