@@ -1,152 +1,325 @@
 """
-Service D - AI Agent Service
-FastAPI application for market signal analysis using LangChain and RAG.
+Service D - AI Agent Service with RAG
+FastAPI application for intelligent market analysis using RAG and ChromaDB.
 """
 
 import logging
+import os
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+from src.db.chroma_client import ChromaDBClient
+from src.services.embedding_service import EmbeddingService
+from src.services.rag_service import RAGService
+
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
-# Initialize FastAPI app
+# Global service instances
+chroma_client: ChromaDBClient | None = None
+embedding_service: EmbeddingService | None = None
+rag_service: RAGService | None = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Lifespan context manager for FastAPI app.
+    Handles startup and shutdown events.
+    """
+    global chroma_client, embedding_service, rag_service
+
+    # Startup
+    logger.info("Starting Service D - AI Agent Service")
+
+    # Get ChromaDB configuration from environment
+    chroma_host = os.getenv("CHROMADB_HOST", "chromadb")
+    chroma_port = int(os.getenv("CHROMADB_PORT", "8000"))
+
+    # Initialize ChromaDB client
+    chroma_client = ChromaDBClient(
+        host=chroma_host,
+        port=chroma_port,
+        collection_name="trading_knowledge",
+    )
+
+    # Connect to ChromaDB with retry logic
+    try:
+        chroma_client.connect()
+    except Exception as e:
+        logger.error(f"Failed to connect to ChromaDB: {e}")
+        raise RuntimeError("ChromaDB connection failed") from e
+
+    # Initialize embedding service
+    embedding_service = EmbeddingService(model_name="all-MiniLM-L6-v2")
+    embedding_service.load_model()
+
+    # Initialize RAG service
+    rag_service = RAGService(
+        chroma_client=chroma_client,
+        embedding_service=embedding_service,
+        chunk_size=500,
+        chunk_overlap=50,
+    )
+
+    logger.info("Service D startup complete")
+
+    yield
+
+    # Shutdown
+    logger.info("Shutting down Service D")
+    if chroma_client:
+        chroma_client.disconnect()
+
+
+# Initialize FastAPI app with lifespan
 app = FastAPI(
     title="Service D - AI Agent Service",
-    description="Market signal analysis using AI agents and RAG",
-    version="0.1.0",
+    description="RAG-powered AI service for trading platform analysis",
+    version="2.0.0",
+    lifespan=lifespan,
 )
 
 
-# Pydantic models
-class MarketSignalRequest(BaseModel):
-    """Request model for market signal analysis"""
-
-    signal: str = Field(..., description="Trading signal to analyze", min_length=1)
-    context: dict[str, Any] | None = Field(
-        default=None,
-        description="Optional context for analysis (asset type, market conditions, etc.)",
-    )
-
-
-class MarketAnalysisResponse(BaseModel):
-    """Response model for market analysis"""
-
-    signal: str
-    analysis: str
-    confidence: float = Field(..., ge=0.0, le=1.0)
-    recommendation: str
-    timestamp: str
-    metadata: dict[str, Any]
-
-
+# Pydantic Models
 class HealthResponse(BaseModel):
     """Health check response"""
 
     status: str
     service: str
     timestamp: str
+    chromadb_connected: bool
+    embedding_model_loaded: bool
 
 
-# Routes
-@app.get("/health", response_model=HealthResponse)
-async def health_check() -> HealthResponse:
-    """
-    Health check endpoint
-    Returns service status and timestamp
-    """
-    return HealthResponse(
-        status="healthy", service="service-d", timestamp=datetime.utcnow().isoformat()
+class IngestRequest(BaseModel):
+    """Request model for document ingestion"""
+
+    text: str = Field(
+        ...,
+        description="Raw text to ingest into knowledge base",
+        min_length=10,
+    )
+    metadata: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional metadata to attach to ingested chunks",
     )
 
 
-@app.post("/api/v1/analyze-market", response_model=MarketAnalysisResponse)
-async def analyze_market(request: MarketSignalRequest) -> MarketAnalysisResponse:
-    """
-    Analyze market signal using AI agents
+class IngestResponse(BaseModel):
+    """Response model for ingestion"""
 
-    This endpoint will eventually integrate:
-    - LangChain agents for signal interpretation
-    - RAG with vector database for historical context
-    - LLM-powered market sentiment analysis
+    status: str
+    chunks_ingested: int
+    embedding_dimension: int
+    message: str
 
-    Currently returns mock analysis for scaffolding purposes.
+
+class AskRequest(BaseModel):
+    """Request model for asking questions"""
+
+    question: str = Field(
+        ...,
+        description="Question to answer using RAG",
+        min_length=5,
+    )
+    top_k: int = Field(
+        default=3,
+        description="Number of context chunks to retrieve",
+        ge=1,
+        le=10,
+    )
+
+
+class ContextChunk(BaseModel):
+    """Context chunk retrieved from knowledge base"""
+
+    document: str
+    metadata: dict[str, Any]
+    distance: float | None
+    rank: int
+
+
+class AskResponse(BaseModel):
+    """Response model for questions"""
+
+    answer: str
+    confidence: float
+    context: list[ContextChunk]
+    source: str
+    timestamp: str
+
+
+class StatsResponse(BaseModel):
+    """Knowledge base statistics"""
+
+    status: str
+    collection_name: str | None = None
+    total_chunks: int | None = None
+    embedding_dimension: int | None = None
+
+
+# API Endpoints
+@app.get("/health", response_model=HealthResponse)
+async def health_check() -> HealthResponse:
     """
+    Health check endpoint.
+    Reports service status and dependencies.
+    """
+    chromadb_connected = chroma_client.is_connected() if chroma_client else False
+    embedding_loaded = embedding_service.is_loaded() if embedding_service else False
+
+    status = "healthy" if chromadb_connected and embedding_loaded else "degraded"
+
+    return HealthResponse(
+        status=status,
+        service="service-d",
+        timestamp=datetime.utcnow().isoformat(),
+        chromadb_connected=chromadb_connected,
+        embedding_model_loaded=embedding_loaded,
+    )
+
+
+@app.post("/api/v1/ingest", response_model=IngestResponse)
+async def ingest_document(request: IngestRequest) -> IngestResponse:
+    """
+    Ingest text into the knowledge base.
+
+    The text will be:
+    1. Split into semantic chunks
+    2. Embedded using sentence transformers
+    3. Stored in ChromaDB for retrieval
+
+    Args:
+        request: Ingestion request with text and optional metadata
+
+    Returns:
+        Ingestion result with statistics
+    """
+    if not rag_service:
+        raise HTTPException(
+            status_code=503,
+            detail="RAG service not initialized",
+        )
+
     try:
-        logger.info(f"Analyzing market signal: {request.signal[:50]}...")
+        logger.info(f"Ingesting document (length: {len(request.text)})")
 
-        # Mock analysis logic (to be replaced with LangChain agents)
-        analysis = _mock_analyze_signal(request.signal, request.context)
+        result = rag_service.ingest_text(
+            text=request.text,
+            metadata=request.metadata,
+        )
 
-        logger.info(f"Analysis complete. Confidence: {analysis['confidence']}")
-
-        return MarketAnalysisResponse(
-            signal=request.signal,
-            analysis=analysis["analysis"],
-            confidence=analysis["confidence"],
-            recommendation=analysis["recommendation"],
-            timestamp=datetime.utcnow().isoformat(),
-            metadata={
-                "agent_version": "mock-0.1.0",
-                "processing_time_ms": 50,
-                "context_used": request.context is not None,
-                **(request.context or {}),
-            },
+        return IngestResponse(
+            status=result["status"],
+            chunks_ingested=result["chunks_ingested"],
+            embedding_dimension=result.get("embedding_dimension", 0),
+            message=f"Successfully ingested {result['chunks_ingested']} chunks",
         )
 
     except Exception as e:
-        logger.error(f"Error analyzing signal: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to analyze market signal: {str(e)}")
+        logger.error(f"Ingestion failed: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Ingestion failed: {str(e)}",
+        ) from e
 
 
-def _mock_analyze_signal(signal: str, context: dict[str, Any] | None) -> dict[str, Any]:
+@app.post("/api/v1/ask", response_model=AskResponse)
+async def ask_question(request: AskRequest) -> AskResponse:
     """
-    Mock signal analysis function
+    Ask a question using RAG.
 
-    TODO: Replace with actual LangChain agent implementation
-    This will integrate:
-    - agents/market_analyzer.py: LangChain agent for signal interpretation
-    - rag/vector_store.py: Vector database for historical pattern matching
+    The question will be:
+    1. Embedded using the same model as documents
+    2. Used to search ChromaDB for relevant context
+    3. Synthesized into an answer (mock LLM for now)
+
+    Args:
+        request: Question request
+
+    Returns:
+        Answer with context and confidence
     """
-    signal_lower = signal.lower()
+    if not rag_service:
+        raise HTTPException(
+            status_code=503,
+            detail="RAG service not initialized",
+        )
 
-    # Simple keyword-based mock analysis
-    if "buy" in signal_lower or "bullish" in signal_lower:
-        return {
-            "analysis": (
-                "Mock analysis: Signal indicates bullish sentiment. "
-                "Historical patterns suggest upward price movement. "
-                "Market conditions appear favorable for long positions."
-            ),
-            "confidence": 0.75,
-            "recommendation": "CONSIDER_BUY",
-        }
-    elif "sell" in signal_lower or "bearish" in signal_lower:
-        return {
-            "analysis": (
-                "Mock analysis: Signal indicates bearish sentiment. "
-                "Historical patterns suggest downward price movement. "
-                "Market conditions appear favorable for short positions or holding cash."
-            ),
-            "confidence": 0.72,
-            "recommendation": "CONSIDER_SELL",
-        }
-    else:
-        return {
-            "analysis": (
-                "Mock analysis: Signal is neutral or unclear. "
-                "No strong directional indicators detected. "
-                "Recommend waiting for clearer market signals."
-            ),
-            "confidence": 0.50,
-            "recommendation": "HOLD",
-        }
+    try:
+        logger.info(f"Answering question: {request.question[:100]}")
+
+        result = rag_service.ask(
+            question=request.question,
+            top_k=request.top_k,
+        )
+
+        # Convert context to Pydantic models
+        context_chunks = [
+            ContextChunk(
+                document=ctx["document"],
+                metadata=ctx["metadata"],
+                distance=ctx.get("distance"),
+                rank=ctx["rank"],
+            )
+            for ctx in result["context"]
+        ]
+
+        return AskResponse(
+            answer=result["answer"],
+            confidence=result["confidence"],
+            context=context_chunks,
+            source=result["source"],
+            timestamp=datetime.utcnow().isoformat(),
+        )
+
+    except Exception as e:
+        logger.error(f"Question answering failed: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to answer question: {str(e)}",
+        ) from e
+
+
+@app.get("/api/v1/stats", response_model=StatsResponse)
+async def get_stats() -> StatsResponse:
+    """
+    Get knowledge base statistics.
+
+    Returns:
+        Statistics about the vector database
+    """
+    if not rag_service:
+        raise HTTPException(
+            status_code=503,
+            detail="RAG service not initialized",
+        )
+
+    try:
+        stats = rag_service.get_stats()
+
+        return StatsResponse(
+            status=stats["status"],
+            collection_name=stats.get("collection_name"),
+            total_chunks=stats.get("total_chunks"),
+            embedding_dimension=stats.get("embedding_dimension"),
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to get stats: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get stats: {str(e)}",
+        ) from e
 
 
 @app.get("/")
@@ -154,9 +327,20 @@ async def root() -> dict[str, Any]:
     """Root endpoint with service information"""
     return {
         "service": "service-d",
-        "description": "AI Agent Service for market analysis",
-        "version": "0.1.0",
-        "endpoints": {"health": "/health", "analyze": "/api/v1/analyze-market"},
+        "description": "AI Agent Service with RAG capabilities",
+        "version": "2.0.0",
+        "endpoints": {
+            "health": "/health",
+            "ingest": "/api/v1/ingest",
+            "ask": "/api/v1/ask",
+            "stats": "/api/v1/stats",
+        },
+        "features": [
+            "Document ingestion with chunking",
+            "Semantic search with sentence transformers",
+            "RAG-based question answering",
+            "ChromaDB vector storage",
+        ],
     }
 
 
