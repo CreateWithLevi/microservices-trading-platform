@@ -51,15 +51,17 @@ services:
     depends_on:
       - rabbitmq
       - redis
+      - service-c
     networks:
       - trading_network
     environment:
       - RABBITMQ_URL=amqp://rabbitmq
       - REDIS_URL=redis://redis:6379
+      - RISK_SERVICE_URL=service-c:50051
 
   # ----------------------------------------------------
 
-  # Service 5: Risk Checker gRPC Service (Service C)
+  # Service 5: Risk Checker Service (Service C)
   service-c:
     build:
       context: ./service-c           # Dockerfile context path (service-c)

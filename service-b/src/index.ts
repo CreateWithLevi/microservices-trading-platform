@@ -1,11 +1,13 @@
 import amqp from 'amqplib';
 import Redis from 'ioredis';
 import { getAssetPrice, storeTradeHistory, type TradeSignal } from './trading';
+import { RiskClient } from './grpc-client';
 
 // --- Configuration ---
 // Must match Service A's configuration exactly
 const RABBITMQ_URL = process.env.RABBITMQ_URL || 'amqp://localhost'; // RabbitMQ server URL (from env or default to localhost)
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379'; // Redis server URL
+const RISK_SERVICE_URL = process.env.RISK_SERVICE_URL || 'service-c:50051'; // gRPC Risk Service URL
 const QUEUE_NAME = 'trading_signals';
 
 // --- Redis Client ---
@@ -24,15 +26,47 @@ redis.on('error', (err: Error) => {
   console.error('[Service B] Redis connection error:', err.message);
 });
 
+// --- Risk Service Client ---
+const riskClient = new RiskClient(RISK_SERVICE_URL);
+
 /**
- * Process trade with Redis integration
+ * Process trade with Risk Service validation and Redis integration
  */
 async function processTrade(signal: TradeSignal): Promise<void> {
   console.log(
     `[Service B] Processing signal: ${signal.action} ${signal.volume} MWh for ${signal.assetId}`
   );
 
-  // Get asset price from Redis cache
+  // Step 1: Check trade risk with Risk Service (service-c)
+  try {
+    const riskCheck = await riskClient.checkRisk({
+      assetId: signal.assetId,
+      volume: signal.volume,
+      action: signal.action,
+      timestamp: signal.timestamp,
+    });
+
+    console.log(
+      `[Service B] Risk check result: ${riskCheck.allowed ? 'ALLOWED' : 'REJECTED'} (checkId: ${riskCheck.checkId})`
+    );
+
+    // If risk check fails, log and skip the trade
+    if (!riskCheck.allowed) {
+      console.log(`[Service B] ⚠️  Trade REJECTED by Risk Service. Reason: ${riskCheck.reason}`);
+      console.log(`[Service B] Trade skipped. Message acknowledged without processing.`);
+      return; // Exit early - trade will be ack'd but not stored
+    }
+
+    console.log(`[Service B] ✓ Trade approved by Risk Service. Proceeding...`);
+  } catch (error) {
+    // If Risk Service is down or unreachable, log error and skip trade
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error(`[Service B] ❌ Risk Service check failed: ${errorMessage}`);
+    console.log(`[Service B] Trade skipped due to Risk Service error.`);
+    return; // Exit early - trade will be ack'd but not stored
+  }
+
+  // Step 2: Get asset price from Redis cache
   const price = await getAssetPrice(redis, signal.assetId);
   const totalValue = (signal.volume * price).toFixed(2);
 
@@ -40,7 +74,7 @@ async function processTrade(signal: TradeSignal): Promise<void> {
     `[Service B] Trade details: ${signal.action} ${signal.volume} MWh @ $${price}/MWh = $${totalValue}`
   );
 
-  // Store trade in Redis
+  // Step 3: Store trade in Redis
   await storeTradeHistory(redis, signal, price);
 
   // Simulate database write delay
@@ -54,16 +88,20 @@ async function processTrade(signal: TradeSignal): Promise<void> {
  */
 async function startConsumer(): Promise<void> {
   try {
-    // 1. Connect to RabbitMQ server
+    // 1. Connect to Risk Service (gRPC)
+    console.log('[Service B] Connecting to Risk Service...');
+    riskClient.connect();
+
+    // 2. Connect to RabbitMQ server
     const connection = await amqp.connect(RABBITMQ_URL);
     const channel = await connection.createChannel();
 
-    // 2. Assert the queue (ensure it exists)
+    // 3. Assert the queue (ensure it exists)
     await channel.assertQueue(QUEUE_NAME, { durable: false });
 
     console.log('[Service B] Started successfully. Waiting for signals in the queue...');
 
-    // 3. Consume messages from the queue
+    // 4. Consume messages from the queue
     // This sets up a listener
     await channel.consume(
       QUEUE_NAME,
@@ -77,7 +115,7 @@ async function startConsumer(): Promise<void> {
             // Process our business logic
             void processTrade(signal)
               .then(() => {
-                // 4. (IMPORTANT) Acknowledge the message (Ack)
+                // 5. (IMPORTANT) Acknowledge the message (Ack)
                 // Tell RabbitMQ we've successfully processed this message, it can be deleted
                 channel.ack(msg);
               })
@@ -109,8 +147,24 @@ async function startConsumer(): Promise<void> {
   }
 }
 
+// Graceful shutdown handlers
+process.on('SIGINT', () => {
+  console.log('\n[Service B] Received SIGINT, shutting down gracefully...');
+  riskClient.close();
+  redis.disconnect();
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  console.log('\n[Service B] Received SIGTERM, shutting down gracefully...');
+  riskClient.close();
+  redis.disconnect();
+  process.exit(0);
+});
+
 // Start the consumer
 startConsumer().catch((error) => {
   console.error('[Service B] Fatal error during startup:', error);
+  riskClient.close();
   process.exit(1);
 });
