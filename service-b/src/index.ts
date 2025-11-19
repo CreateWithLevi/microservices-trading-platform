@@ -11,6 +11,13 @@ if (process.env.SENTRY_DSN) {
     dsn: process.env.SENTRY_DSN,
     environment: process.env.NODE_ENV || 'production',
     tracesSampleRate: 1.0, // 100% of transactions for performance monitoring
+    enableLogs: true, // Enable structured logging to Sentry
+    integrations: [
+      // Automatically capture console.log, console.warn, and console.error as logs
+      Sentry.consoleLoggingIntegration({
+        levels: ['log', 'warn', 'error'],
+      }),
+    ],
   });
   console.log('[Service B] Sentry initialized successfully');
 } else {
@@ -38,6 +45,13 @@ redis.on('connect', () => {
 
 redis.on('error', (err: Error) => {
   console.error('[Service B] Redis connection error:', err.message);
+  // Capture Redis connection errors in Sentry
+  Sentry.captureException(err, {
+    tags: {
+      service: 'service-b',
+      operation: 'redis-connection',
+    },
+  });
 });
 
 // --- Risk Service Client ---
@@ -47,68 +61,84 @@ const riskClient = new RiskClient(RISK_SERVICE_URL);
  * Process trade with Risk Service validation and Redis integration
  */
 async function processTrade(signal: TradeSignal): Promise<void> {
-  console.log(
-    `[Service B] Processing signal: ${signal.action} ${signal.volume} MWh for ${signal.assetId}`
-  );
-
-  // Step 1: Check trade risk with Risk Service (service-c)
-  try {
-    const riskCheck = await riskClient.checkRisk({
-      assetId: signal.assetId,
-      volume: signal.volume,
-      action: signal.action,
-      timestamp: signal.timestamp,
-    });
-
-    console.log(
-      `[Service B] Risk check result: ${riskCheck.allowed ? 'ALLOWED' : 'REJECTED'} (checkId: ${riskCheck.checkId})`
-    );
-
-    // If risk check fails, log and skip the trade
-    if (!riskCheck.allowed) {
-      console.log(`[Service B] ⚠️  Trade REJECTED by Risk Service. Reason: ${riskCheck.reason}`);
-      console.log(`[Service B] Trade skipped. Message acknowledged without processing.`);
-      return; // Exit early - trade will be ack'd but not stored
-    }
-
-    console.log(`[Service B] ✓ Trade approved by Risk Service. Proceeding...`);
-  } catch (error) {
-    // If Risk Service is down or unreachable, log error and skip trade
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    console.error(`[Service B] ❌ Risk Service check failed: ${errorMessage}`);
-    console.log(`[Service B] Trade skipped due to Risk Service error.`);
-
-    // Capture error in Sentry
-    Sentry.captureException(error, {
-      tags: {
-        service: 'service-b',
-        operation: 'risk-check',
-      },
-      extra: {
-        assetId: signal.assetId,
+  // Create a span to measure performance of trade processing
+  await Sentry.startSpan(
+    {
+      op: 'message.process',
+      name: `Process trade: ${signal.assetId}`,
+      attributes: {
         action: signal.action,
         volume: signal.volume,
+        assetId: signal.assetId,
       },
-    });
+    },
+    async () => {
+      console.log(
+        `[Service B] Processing signal: ${signal.action} ${signal.volume} MWh for ${signal.assetId}`
+      );
 
-    return; // Exit early - trade will be ack'd but not stored
-  }
+      // Step 1: Check trade risk with Risk Service (service-c)
+      try {
+        const riskCheck = await riskClient.checkRisk({
+          assetId: signal.assetId,
+          volume: signal.volume,
+          action: signal.action,
+          timestamp: signal.timestamp,
+        });
 
-  // Step 2: Get asset price from Redis cache
-  const price = await getAssetPrice(redis, signal.assetId);
-  const totalValue = (signal.volume * price).toFixed(2);
+        console.log(
+          `[Service B] Risk check result: ${riskCheck.allowed ? 'ALLOWED' : 'REJECTED'} (checkId: ${riskCheck.checkId})`
+        );
 
-  console.log(
-    `[Service B] Trade details: ${signal.action} ${signal.volume} MWh @ $${price}/MWh = $${totalValue}`
+        // If risk check fails, log and skip the trade
+        if (!riskCheck.allowed) {
+          console.log(
+            `[Service B] ⚠️  Trade REJECTED by Risk Service. Reason: ${riskCheck.reason}`
+          );
+          console.log(`[Service B] Trade skipped. Message acknowledged without processing.`);
+          return; // Exit early - trade will be ack'd but not stored
+        }
+
+        console.log(`[Service B] ✓ Trade approved by Risk Service. Proceeding...`);
+      } catch (error) {
+        // If Risk Service is down or unreachable, log error and skip trade
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        console.error(`[Service B] ❌ Risk Service check failed: ${errorMessage}`);
+        console.log(`[Service B] Trade skipped due to Risk Service error.`);
+
+        // Capture error in Sentry
+        Sentry.captureException(error, {
+          tags: {
+            service: 'service-b',
+            operation: 'risk-check',
+          },
+          extra: {
+            assetId: signal.assetId,
+            action: signal.action,
+            volume: signal.volume,
+          },
+        });
+
+        return; // Exit early - trade will be ack'd but not stored
+      }
+
+      // Step 2: Get asset price from Redis cache
+      const price = await getAssetPrice(redis, signal.assetId);
+      const totalValue = (signal.volume * price).toFixed(2);
+
+      console.log(
+        `[Service B] Trade details: ${signal.action} ${signal.volume} MWh @ $${price}/MWh = $${totalValue}`
+      );
+
+      // Step 3: Store trade in Redis
+      await storeTradeHistory(redis, signal, price);
+
+      // Simulate database write delay
+      await new Promise((resolve) => setTimeout(resolve, 50)); // Simulate 50ms of work
+
+      console.log(`[Service B] ...Processing complete. Trade saved to database and Redis.`);
+    }
   );
-
-  // Step 3: Store trade in Redis
-  await storeTradeHistory(redis, signal, price);
-
-  // Simulate database write delay
-  await new Promise((resolve) => setTimeout(resolve, 50)); // Simulate 50ms of work
-
-  console.log(`[Service B] ...Processing complete. Trade saved to database and Redis.`);
 }
 
 /**
