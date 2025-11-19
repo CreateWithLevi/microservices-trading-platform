@@ -28,8 +28,10 @@ services:
   # Service 3: AI Signal Generator (Service A)
   service-a:
     build:
-      context: ./service-a           # Dockerfile context path (service-a)
-      dockerfile: ../Dockerfile.node # Our shared Dockerfile
+      context: .                              # Root context
+      dockerfile: Dockerfile.node
+      args:
+        - SERVICE_DIR=service-a
     container_name: service-a
     # 'depends_on' ensures rabbitmq starts before service A
     depends_on:
@@ -45,9 +47,13 @@ services:
   # Service 4: Trade Execution Service (Service B)
   service-b:
     build:
-      context: ./service-b           # Dockerfile context path (service-b)
-      dockerfile: ../Dockerfile.node # Our shared Dockerfile
+      context: .                              # Root context
+      dockerfile: Dockerfile.node
+      args:
+        - SERVICE_DIR=service-b
     # No container_name to allow scaling
+    ports:
+      - "3000:3000"                           # Expose metrics HTTP endpoint
     depends_on:
       - rabbitmq
       - redis
@@ -127,7 +133,7 @@ services:
 
   # Monitoring: RabbitMQ Exporter
   rabbitmq-exporter:
-    image: kbudde/rabbitmq-exporter:v1.0.0-RC19
+    image: kbudde/rabbitmq-exporter:latest
     container_name: rabbitmq-exporter
     ports:
       - "9419:9419"

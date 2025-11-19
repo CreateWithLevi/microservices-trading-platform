@@ -36,8 +36,10 @@ export class RiskClient {
 
   constructor(serverAddress = 'service-c:50051') {
     this.serverAddress = serverAddress;
-    // Proto file path relative to project root
-    this.protoPath = path.join(__dirname, '../../protos/risk.proto');
+    // Proto file path - __dirname is /app/dist in Docker, /app/dist in local
+    // For Docker containers: /app/protos/risk.proto
+    // For local dev: navigate from dist up to protos folder
+    this.protoPath = path.join(__dirname, '../protos/risk.proto');
   }
 
   /**
