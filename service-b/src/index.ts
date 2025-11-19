@@ -141,7 +141,11 @@ async function processTrade(signal: TradeSignal): Promise<void> {
 
         // Track metrics for error case
         riskChecksTotal.inc({ result: 'error' });
-        tradesProcessedTotal.inc({ action: signal.action, asset_id: signal.assetId, status: 'error' });
+        tradesProcessedTotal.inc({
+          action: signal.action,
+          asset_id: signal.assetId,
+          status: 'error',
+        });
         timer({ status: 'error' });
 
         return; // Exit early - trade will be ack'd but not stored
@@ -164,7 +168,11 @@ async function processTrade(signal: TradeSignal): Promise<void> {
       console.log(`[Service B] ...Processing complete. Trade saved to database and Redis.`);
 
       // Track metrics for successful trade
-      tradesProcessedTotal.inc({ action: signal.action, asset_id: signal.assetId, status: 'approved' });
+      tradesProcessedTotal.inc({
+        action: signal.action,
+        asset_id: signal.assetId,
+        status: 'approved',
+      });
       timer({ status: 'approved' });
     }
   );
