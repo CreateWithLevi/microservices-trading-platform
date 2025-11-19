@@ -23,14 +23,16 @@ export function startMetricsServer(): void {
   });
 
   // Prometheus metrics endpoint
-  app.get('/metrics', async (_req: Request, res: Response) => {
-    try {
-      res.set('Content-Type', register.contentType);
-      const metrics = await register.metrics();
-      res.end(metrics);
-    } catch (error) {
-      res.status(500).end(error);
-    }
+  app.get('/metrics', (_req: Request, res: Response) => {
+    void (async () => {
+      try {
+        res.set('Content-Type', register.contentType);
+        const metrics = await register.metrics();
+        res.end(metrics);
+      } catch (error) {
+        res.status(500).end(error);
+      }
+    })();
   });
 
   const server = app.listen(METRICS_PORT, () => {

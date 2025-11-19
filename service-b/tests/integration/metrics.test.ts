@@ -5,20 +5,19 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { startMetricsServer } from '../../src/metrics-server';
 import { register } from '../../src/metrics';
+import type { Server } from 'http';
 
 describe('Metrics Endpoint Integration', () => {
   const TEST_PORT = 13001; // Use a high port to avoid conflicts
   const BASE_URL = `http://localhost:${TEST_PORT}`;
-  let server: any;
+  let server: Server | undefined;
 
   beforeAll(async () => {
     // Set environment variable for test port
     process.env.METRICS_PORT = TEST_PORT.toString();
 
     // Start metrics server in background
-    // Note: startMetricsServer returns void and starts an Express server
     // We need to capture the server instance for cleanup
     const express = await import('express');
 
@@ -28,14 +27,16 @@ describe('Metrics Endpoint Integration', () => {
       res.status(200).json({ status: 'healthy', service: 'service-b' });
     });
 
-    app.get('/metrics', async (_req, res) => {
-      try {
-        res.set('Content-Type', register.contentType);
-        const metrics = await register.metrics();
-        res.end(metrics);
-      } catch (error) {
-        res.status(500).end(error);
-      }
+    app.get('/metrics', (_req, res) => {
+      void (async () => {
+        try {
+          res.set('Content-Type', register.contentType);
+          const metrics = await register.metrics();
+          res.end(metrics);
+        } catch (error) {
+          res.status(500).end(error);
+        }
+      })();
     });
 
     server = app.listen(TEST_PORT);
@@ -46,7 +47,7 @@ describe('Metrics Endpoint Integration', () => {
 
   afterAll(async () => {
     if (server) {
-      await new Promise((resolve) => server.close(resolve));
+      await new Promise<void>((resolve) => server?.close(() => resolve()));
     }
   });
 
