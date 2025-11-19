@@ -51,11 +51,11 @@ func (s *RiskServer) CheckTradeRisk(ctx context.Context, req *riskpb.TradeRiskRe
 				scope.SetTag("operation", "risk-check")
 				scope.SetTag("result", "rejected")
 				scope.SetContext("trade", map[string]interface{}{
-					"checkId":  checkID,
-					"assetId":  req.AssetId,
-					"action":   req.Action,
-					"volume":   req.Volume,
-					"reason":   reason,
+					"checkId": checkID,
+					"assetId": req.AssetId,
+					"action":  req.Action,
+					"volume":  req.Volume,
+					"reason":  reason,
 				})
 				hub.CaptureMessage(reason)
 			})
