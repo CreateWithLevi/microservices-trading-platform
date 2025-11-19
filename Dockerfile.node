@@ -5,18 +5,20 @@
 FROM node:18-alpine AS builder
 LABEL stage="builder"
 
+ARG SERVICE_DIR=service-b
+
 WORKDIR /app
 
 # Copy package.json and lock files
-# 'COPY' will copy from the 'context' specified in docker-compose.yml
-COPY package*.json ./
+COPY ${SERVICE_DIR}/package*.json ./
 
 # Install all dependencies (including devDependencies for building)
 RUN npm install
 
 # Copy source code
-COPY tsconfig.json .
-COPY src ./src
+COPY ${SERVICE_DIR}/tsconfig.json .
+COPY ${SERVICE_DIR}/src ./src
+COPY protos ./protos
 
 # Compile TypeScript
 RUN npm run build
@@ -27,16 +29,21 @@ RUN npm run build
 # Use a lightweight Node.js image (without devDependencies)
 FROM node:18-alpine
 
+ARG SERVICE_DIR=service-b
+
 WORKDIR /app
 
 # Only copy production-needed package.json
-COPY package*.json ./
+COPY ${SERVICE_DIR}/package*.json ./
 
 # Install *only* production dependencies to reduce image size
 RUN npm install --omit=dev
 
 # Copy compiled JavaScript files from 'builder' stage
 COPY --from=builder /app/dist ./dist
+
+# Copy proto files for gRPC client
+COPY protos ./protos
 
 # Expose service port (although we don't use HTTP here, it's good practice)
 EXPOSE 3000

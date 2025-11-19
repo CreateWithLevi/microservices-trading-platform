@@ -1,4 +1,5 @@
 import type Redis from 'ioredis';
+import { redisCacheTotal } from './metrics';
 
 // --- Trading Signal Type ---
 export type TradeSignal = {
@@ -22,6 +23,7 @@ export async function getAssetPrice(redis: Redis, assetId: string): Promise<numb
 
   if (cachedPrice) {
     console.log(`[Service B] Cache HIT: Retrieved price for ${assetId} = $${cachedPrice}`);
+    redisCacheTotal.inc({ operation: 'price_cache', result: 'hit' });
     return parseFloat(cachedPrice);
   }
 
@@ -31,6 +33,7 @@ export async function getAssetPrice(redis: Redis, assetId: string): Promise<numb
   console.log(
     `[Service B] Cache MISS: Generated new price for ${assetId} = $${newPrice} (cached for 30s)`
   );
+  redisCacheTotal.inc({ operation: 'price_cache', result: 'miss' });
 
   return newPrice;
 }
@@ -52,6 +55,7 @@ export async function storeTradeHistory(
   // Store in a Redis list for trade history
   await redis.lpush('trade_history', JSON.stringify(tradeRecord));
   await redis.ltrim('trade_history', 0, 99); // Keep only last 100 trades
+  redisCacheTotal.inc({ operation: 'trade_history', result: 'write' });
 
   // Increment trade counter
   await redis.incr(`trade_count:${signal.assetId}`);

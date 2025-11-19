@@ -1,0 +1,51 @@
+# Prometheus Configuration for Trading Platform Monitoring
+
+global:
+  scrape_interval: 15s      # Scrape targets every 15 seconds
+  evaluation_interval: 15s  # Evaluate rules every 15 seconds
+  external_labels:
+    cluster: 'trading-platform'
+    environment: 'docker-compose'
+
+# Scrape configurations
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          service: 'prometheus'
+
+  # Service B (Node.js Trade Execution Service)
+  - job_name: 'service-b'
+    static_configs:
+      - targets: ['service-b:3000']
+        labels:
+          service: 'service-b'
+          type: 'trade-execution'
+    metrics_path: '/metrics'
+
+  # Service C (Go Risk Checker gRPC Service)
+  - job_name: 'service-c'
+    static_configs:
+      - targets: ['service-c:8080']
+        labels:
+          service: 'service-c'
+          type: 'risk-checker'
+    metrics_path: '/metrics'
+
+  # RabbitMQ Exporter (for queue metrics)
+  - job_name: 'rabbitmq'
+    static_configs:
+      - targets: ['rabbitmq-exporter:9419']
+        labels:
+          service: 'rabbitmq'
+          type: 'message-broker'
+
+  # Redis Exporter (for cache metrics)
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+        labels:
+          service: 'redis'
+          type: 'cache'

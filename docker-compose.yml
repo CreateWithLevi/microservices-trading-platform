@@ -28,8 +28,10 @@ services:
   # Service 3: AI Signal Generator (Service A)
   service-a:
     build:
-      context: ./service-a           # Dockerfile context path (service-a)
-      dockerfile: ../Dockerfile.node # Our shared Dockerfile
+      context: .                              # Root context
+      dockerfile: Dockerfile.node
+      args:
+        - SERVICE_DIR=service-a
     container_name: service-a
     # 'depends_on' ensures rabbitmq starts before service A
     depends_on:
@@ -45,9 +47,13 @@ services:
   # Service 4: Trade Execution Service (Service B)
   service-b:
     build:
-      context: ./service-b           # Dockerfile context path (service-b)
-      dockerfile: ../Dockerfile.node # Our shared Dockerfile
+      context: .                              # Root context
+      dockerfile: Dockerfile.node
+      args:
+        - SERVICE_DIR=service-b
     # No container_name to allow scaling
+    ports:
+      - "3000:3000"                           # Expose metrics HTTP endpoint
     depends_on:
       - rabbitmq
       - redis
@@ -70,11 +76,90 @@ services:
     container_name: service-c
     ports:
       - "50051:50051"                # Expose gRPC port
+      - "8080:8080"                  # Expose metrics HTTP port
     networks:
       - trading_network
     environment:
       - GRPC_PORT=50051
       - SENTRY_DSN=${SENTRY_DSN_SERVICE_C:-}
+      - METRICS_PORT=8080
+
+  # ----------------------------------------------------
+
+  # Monitoring: Prometheus
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    networks:
+      - trading_network
+    depends_on:
+      - service-b
+      - service-c
+
+  # ----------------------------------------------------
+
+  # Monitoring: Grafana
+  grafana:
+    image: grafana/grafana:10.2.2
+    container_name: grafana
+    ports:
+      - "3001:3000"  # Map to 3001 to avoid conflict with default Node.js ports
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning
+      - grafana_data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:3001
+    networks:
+      - trading_network
+    depends_on:
+      - prometheus
+
+  # ----------------------------------------------------
+
+  # Monitoring: RabbitMQ Exporter
+  rabbitmq-exporter:
+    image: kbudde/rabbitmq-exporter:latest
+    container_name: rabbitmq-exporter
+    ports:
+      - "9419:9419"
+    environment:
+      - RABBIT_URL=http://rabbitmq:15672
+      - RABBIT_USER=guest
+      - RABBIT_PASSWORD=guest
+      - PUBLISH_PORT=9419
+    networks:
+      - trading_network
+    depends_on:
+      - rabbitmq
+
+  # ----------------------------------------------------
+
+  # Monitoring: Redis Exporter
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.55.0-alpine
+    container_name: redis-exporter
+    ports:
+      - "9121:9121"
+    environment:
+      - REDIS_ADDR=redis://redis:6379
+    networks:
+      - trading_network
+    depends_on:
+      - redis
 
 # ------------------------------------------------------
 
@@ -82,3 +167,8 @@ services:
 networks:
   trading_network:
     driver: bridge
+
+# Persistent volumes for monitoring data
+volumes:
+  prometheus_data:
+  grafana_data:

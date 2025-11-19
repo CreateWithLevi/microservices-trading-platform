@@ -17,7 +17,8 @@ import (
 )
 
 const (
-	defaultPort = "50051"
+	defaultPort        = "50051"
+	defaultMetricsPort = "8080"
 )
 
 func main() {
@@ -40,10 +41,15 @@ func main() {
 		log.Println("SENTRY_DSN not provided, error tracking disabled")
 	}
 
-	// Get port from environment variable or use default
+	// Get ports from environment variables or use defaults
 	port := os.Getenv("GRPC_PORT")
 	if port == "" {
 		port = defaultPort
+	}
+
+	metricsPort := os.Getenv("METRICS_PORT")
+	if metricsPort == "" {
+		metricsPort = defaultMetricsPort
 	}
 
 	// Create TCP listener
@@ -79,13 +85,22 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	// Start server in goroutine
+	// Start HTTP metrics server in goroutine
+	go func() {
+		log.Printf("Starting HTTP metrics server on port %s...", metricsPort)
+		if err := server.StartMetricsServer(metricsPort); err != nil {
+			log.Fatalf("Failed to start metrics server: %v", err)
+		}
+	}()
+
+	// Start gRPC server in goroutine
 	go func() {
 		log.Printf("========================================")
 		log.Printf("Risk Checker gRPC Server (Service C)")
 		log.Printf("========================================")
 		log.Printf("Started at: %s", server.GetServerStartTime())
-		log.Printf("Listening on port: %s", port)
+		log.Printf("gRPC Port: %s", port)
+		log.Printf("Metrics Port: %s", metricsPort)
 		log.Printf("Protocol: gRPC")
 		log.Printf("Reflection: Enabled")
 		log.Printf("========================================")
