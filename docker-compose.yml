@@ -117,7 +117,6 @@ services:
       - "3001:3000"  # Map to 3001 to avoid conflict with default Node.js ports
     volumes:
       - ./infra/grafana/provisioning:/etc/grafana/provisioning
-      - ./infra/grafana/dashboards:/etc/grafana/provisioning/dashboards
       - grafana_data:/var/lib/grafana
     environment:
       - GF_SECURITY_ADMIN_USER=admin
