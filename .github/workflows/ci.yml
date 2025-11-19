@@ -167,8 +167,10 @@ jobs:
       - name: Build Service A
         uses: docker/build-push-action@v5
         with:
-          context: ./service-a
+          context: .
           file: ./Dockerfile.node
+          build-args: |
+            SERVICE_DIR=service-a
           push: false
           tags: service-a:test
           cache-from: type=gha
@@ -177,8 +179,10 @@ jobs:
       - name: Build Service B
         uses: docker/build-push-action@v5
         with:
-          context: ./service-b
+          context: .
           file: ./Dockerfile.node
+          build-args: |
+            SERVICE_DIR=service-b
           push: false
           tags: service-b:test
           cache-from: type=gha
