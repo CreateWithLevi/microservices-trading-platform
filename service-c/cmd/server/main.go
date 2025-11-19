@@ -7,9 +7,11 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/createwithlevi/trading-platform/service-c/internal/server"
 	"github.com/createwithlevi/trading-platform/service-c/pkg/riskpb"
+	"github.com/getsentry/sentry-go"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )
@@ -19,6 +21,25 @@ const (
 )
 
 func main() {
+	// Initialize Sentry for error tracking
+	sentryDSN := os.Getenv("SENTRY_DSN")
+	if sentryDSN != "" {
+		err := sentry.Init(sentry.ClientOptions{
+			Dsn:              sentryDSN,
+			Environment:      getEnvironment(),
+			TracesSampleRate: 1.0,
+		})
+		if err != nil {
+			log.Printf("Sentry initialization failed: %v", err)
+		} else {
+			log.Println("Sentry initialized successfully")
+		}
+		// Ensure Sentry events are flushed on exit
+		defer sentry.Flush(2 * time.Second)
+	} else {
+		log.Println("SENTRY_DSN not provided, error tracking disabled")
+	}
+
 	// Get port from environment variable or use default
 	port := os.Getenv("GRPC_PORT")
 	if port == "" {
@@ -28,6 +49,16 @@ func main() {
 	// Create TCP listener
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
 	if err != nil {
+		sentry.WithScope(func(scope *sentry.Scope) {
+			scope.SetTag("service", "service-c")
+			scope.SetTag("operation", "listener-setup")
+			scope.SetContext("listener", map[string]interface{}{
+				"port":     port,
+				"protocol": "tcp",
+			})
+			sentry.CaptureException(err)
+		})
+		sentry.Flush(2 * time.Second)
 		log.Fatalf("Failed to listen on port %s: %v", port, err)
 	}
 
@@ -62,6 +93,17 @@ func main() {
 		log.Printf("")
 
 		if err := grpcServer.Serve(lis); err != nil {
+			sentry.WithScope(func(scope *sentry.Scope) {
+				scope.SetTag("service", "service-c")
+				scope.SetTag("operation", "grpc-server")
+				scope.SetContext("server", map[string]interface{}{
+					"port":     port,
+					"service":  "RiskChecker",
+					"protocol": "gRPC",
+				})
+				sentry.CaptureException(err)
+			})
+			sentry.Flush(2 * time.Second)
 			log.Fatalf("Failed to serve gRPC: %v", err)
 		}
 	}()
@@ -71,4 +113,13 @@ func main() {
 	log.Println("\nReceived shutdown signal, gracefully stopping server...")
 	grpcServer.GracefulStop()
 	log.Println("Server stopped successfully")
+}
+
+// getEnvironment returns the current environment (defaults to production)
+func getEnvironment() string {
+	env := os.Getenv("ENVIRONMENT")
+	if env == "" {
+		return "production"
+	}
+	return env
 }
