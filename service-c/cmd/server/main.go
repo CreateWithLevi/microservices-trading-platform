@@ -49,7 +49,15 @@ func main() {
 	// Create TCP listener
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
 	if err != nil {
-		sentry.CaptureException(err)
+		sentry.WithScope(func(scope *sentry.Scope) {
+			scope.SetTag("service", "service-c")
+			scope.SetTag("operation", "listener-setup")
+			scope.SetContext("listener", map[string]interface{}{
+				"port":     port,
+				"protocol": "tcp",
+			})
+			sentry.CaptureException(err)
+		})
 		sentry.Flush(2 * time.Second)
 		log.Fatalf("Failed to listen on port %s: %v", port, err)
 	}
@@ -85,7 +93,16 @@ func main() {
 		log.Printf("")
 
 		if err := grpcServer.Serve(lis); err != nil {
-			sentry.CaptureException(err)
+			sentry.WithScope(func(scope *sentry.Scope) {
+				scope.SetTag("service", "service-c")
+				scope.SetTag("operation", "grpc-server")
+				scope.SetContext("server", map[string]interface{}{
+					"port":     port,
+					"service":  "RiskChecker",
+					"protocol": "gRPC",
+				})
+				sentry.CaptureException(err)
+			})
 			sentry.Flush(2 * time.Second)
 			log.Fatalf("Failed to serve gRPC: %v", err)
 		}

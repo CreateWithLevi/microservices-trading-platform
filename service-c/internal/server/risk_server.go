@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/createwithlevi/trading-platform/service-c/pkg/riskpb"
+	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 )
 
@@ -26,6 +27,13 @@ func (s *RiskServer) CheckTradeRisk(ctx context.Context, req *riskpb.TradeRiskRe
 	// Generate a unique check ID for this risk assessment
 	checkID := uuid.New().String()
 
+	// Create a Sentry transaction for this risk check
+	transaction := sentry.StartTransaction(ctx, "risk.check")
+	transaction.Description = fmt.Sprintf("Risk check for %s", req.AssetId)
+	transaction.SetTag("asset", req.AssetId)
+	transaction.SetTag("action", req.Action)
+	defer transaction.Finish()
+
 	// Log the incoming request
 	log.Printf("[RiskCheck %s] Checking trade: Asset=%s, Action=%s, Volume=%.2f, Timestamp=%s",
 		checkID, req.AssetId, req.Action, req.Volume, req.Timestamp)
@@ -34,6 +42,24 @@ func (s *RiskServer) CheckTradeRisk(ctx context.Context, req *riskpb.TradeRiskRe
 	if req.Volume > 90 {
 		reason := fmt.Sprintf("Trade rejected: volume %.2f exceeds maximum allowed threshold of 90", req.Volume)
 		log.Printf("[RiskCheck %s] REJECTED: %s", checkID, reason)
+
+		// Capture rejection event in Sentry
+		hub := sentry.GetHubFromContext(ctx)
+		if hub != nil {
+			hub.WithScope(func(scope *sentry.Scope) {
+				scope.SetTag("service", "service-c")
+				scope.SetTag("operation", "risk-check")
+				scope.SetTag("result", "rejected")
+				scope.SetContext("trade", map[string]interface{}{
+					"checkId":  checkID,
+					"assetId":  req.AssetId,
+					"action":   req.Action,
+					"volume":   req.Volume,
+					"reason":   reason,
+				})
+				hub.CaptureMessage(reason)
+			})
+		}
 
 		return &riskpb.TradeRiskResponse{
 			Allowed: false,
@@ -45,6 +71,23 @@ func (s *RiskServer) CheckTradeRisk(ctx context.Context, req *riskpb.TradeRiskRe
 	// Trade is within acceptable risk parameters
 	reason := fmt.Sprintf("Trade approved: volume %.2f is within acceptable limits", req.Volume)
 	log.Printf("[RiskCheck %s] APPROVED: %s", checkID, reason)
+
+	// Capture approval event in Sentry
+	hub := sentry.GetHubFromContext(ctx)
+	if hub != nil {
+		hub.WithScope(func(scope *sentry.Scope) {
+			scope.SetTag("service", "service-c")
+			scope.SetTag("operation", "risk-check")
+			scope.SetTag("result", "approved")
+			scope.SetContext("trade", map[string]interface{}{
+				"checkId": checkID,
+				"assetId": req.AssetId,
+				"action":  req.Action,
+				"volume":  req.Volume,
+			})
+			hub.CaptureMessage(reason)
+		})
+	}
 
 	return &riskpb.TradeRiskResponse{
 		Allowed: true,
