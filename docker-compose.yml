@@ -58,7 +58,7 @@ services:
       - RABBITMQ_URL=amqp://rabbitmq
       - REDIS_URL=redis://redis:6379
       - RISK_SERVICE_URL=service-c:50051
-      - SENTRY_DSN=${SENTRY_DSN:-}
+      - SENTRY_DSN=${SENTRY_DSN_SERVICE_B:-}
 
   # ----------------------------------------------------
 
@@ -74,7 +74,7 @@ services:
       - trading_network
     environment:
       - GRPC_PORT=50051
-      - SENTRY_DSN=${SENTRY_DSN:-}
+      - SENTRY_DSN=${SENTRY_DSN_SERVICE_C:-}
 
 # ------------------------------------------------------
 
